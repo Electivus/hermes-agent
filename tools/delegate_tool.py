@@ -539,7 +539,9 @@ def delegate_task(
     if not err:
         task_images, err = _coerce_task_images(task_list, images)
     if not err:
-        routes, err = plan_child_routes(task_list, routing_cfg=routing_cfg, parent_agent=parent_agent)
+        routes, err = plan_child_routes(
+            task_list, catalog=load_route_catalog(cfg), routing_cfg=routing_cfg, parent_agent=parent_agent,
+        )
     if not err:
         err = _oneshot_spawn_budget(parent_agent, len(task_list))
     if err:
@@ -667,7 +669,7 @@ def _build_dynamic_schema_overrides() -> dict:
     overrides_params["properties"] = {k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()}
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
 
-    route_property = route_schema_property(load_route_catalog())
+    route_property = route_schema_property(load_route_catalog(_load_config()))
     tasks = overrides_params["properties"]["tasks"]
     item_properties = {
         k: v for k, v in tasks["items"]["properties"].items() if independent_completions or k != "group"

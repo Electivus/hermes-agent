@@ -45,13 +45,13 @@ def test_malformed_route_ids_are_errors(text):
 
 
 def test_route_field_tracks_catalog_without_mutating_previous_definitions(monkeypatch):
-    from tools import delegate_tool_config
+    from tools import delegate_tool
 
     original = json.dumps(DELEGATE_TASK_SCHEMA)
     snapshots = []
     for routes in ([], [OPUS], [ASTRA, OPUS], None):
         config = {} if routes is None else {"routes": routes}
-        monkeypatch.setattr(delegate_tool_config, "_cfg", lambda: config)
+        monkeypatch.setattr(delegate_tool, "_load_config", lambda: config)
         definition = _definition()
         properties = _task_properties(definition)
         enabled = bool(routes)
@@ -69,11 +69,11 @@ def test_route_field_tracks_catalog_without_mutating_previous_definitions(monkey
 
 
 def test_malformed_catalog_entries_are_never_advertised(monkeypatch):
-    from tools import delegate_tool_config
+    from tools import delegate_tool
 
     vertex = "vertex/claude-opus-4@20250514"
     routes = [OPUS, "no-slash", "/model-only", "bad provider/m", 7, "anthropic/claude-opus-5-5@hgih", OPUS, vertex]
-    monkeypatch.setattr(delegate_tool_config, "_cfg", lambda: {"routes": routes})
+    monkeypatch.setattr(delegate_tool, "_load_config", lambda: {"routes": routes})
     assert _task_properties(_definition())["route"]["enum"] == [OPUS, vertex]
 
 

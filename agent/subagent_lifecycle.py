@@ -277,8 +277,9 @@ class SubagentLifecycleService:
     def routes(self) -> tuple[str, ...]:
         """Route ids ``delegate_task`` accepts right now: ``delegation.routes`` in operator order, malformed and
         repeated entries dropped. Needs no active parent."""
+        from tools.delegate_tool_config import _load_config
         from tools.delegate_tool_routes import load_route_catalog
-        return load_route_catalog().ids
+        return load_route_catalog(_load_config()).ids
 
     def launch(self, request: SubagentLaunchRequest | Mapping[str, Any]) -> SubagentHandle:
         parent = self._parent_agent_resolver()

@@ -73,10 +73,7 @@ class RouteCatalog:
         return self.routes.get(route_id)
 
 
-def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> RouteCatalog:
-    if delegation_cfg is None:
-        from tools.delegate_tool_config import _cfg
-        delegation_cfg = _cfg()
+def load_route_catalog(delegation_cfg: Mapping[str, Any]) -> RouteCatalog:
     raw = delegation_cfg.get("routes")
     if not isinstance(raw, list):
         if raw is None:
@@ -161,9 +158,8 @@ def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]
 
 
 def plan_child_routes(
-    task_list: Sequence[Mapping[str, Any]], *, routing_cfg: Mapping[str, Any], parent_agent: Any,
+    task_list: Sequence[Mapping[str, Any]], *, catalog: RouteCatalog, routing_cfg: Mapping[str, Any], parent_agent: Any,
 ) -> tuple[list[ChildRoute], Optional[str]]:
-    catalog = load_route_catalog()
     routed = {i: task["route"] for i, task in enumerate(task_list) if "route" in task}
     problems = [problem for i, raw in routed.items() if (problem := _route_problem(i, raw, catalog))]
     if problems:
