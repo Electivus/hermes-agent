@@ -69,9 +69,6 @@ class RouteCatalog:
     def ids(self) -> tuple[str, ...]:
         return tuple(self.routes)
 
-    def get(self, route_id: str) -> Optional[Route]:
-        return self.routes.get(route_id)
-
 
 def load_route_catalog(delegation_cfg: Mapping[str, Any]) -> RouteCatalog:
     raw = delegation_cfg.get("routes")
@@ -100,14 +97,6 @@ class ChildRoute:
     route_id: Optional[str] = None
     reasoning_config: Optional[dict[str, Any]] = None
 
-    @property
-    def model(self) -> Optional[str]:
-        return self.creds.get("model")
-
-    @property
-    def provider(self) -> Optional[str]:
-        return self.creds.get("provider")
-
     def build_kwargs(self) -> dict[str, Any]:
         creds = self.creds
         return {
@@ -119,11 +108,10 @@ class ChildRoute:
         }
 
     def identity(self, parent_agent: Any) -> dict[str, Optional[str]]:
-        model = self.model or getattr(parent_agent, "model", None)
-        provider = self.provider or getattr(parent_agent, "provider", None)
+        from tools.delegate_tool_child_run import _str_or_none
         return {
-            "model": model if isinstance(model, str) else None,
-            "provider": provider if isinstance(provider, str) else None,
+            "model": _str_or_none(self.creds.get("model") or getattr(parent_agent, "model", None)),
+            "provider": _str_or_none(self.creds.get("provider") or getattr(parent_agent, "provider", None)),
             "route": self.route_id,
         }
 
@@ -152,7 +140,7 @@ def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]
         state = "has no valid entries" if catalog.malformed else "is empty"
         return (f"Task {index} names route {raw!r}, but delegation.routes {state}. Omit 'route' to use the "
                 "default subagent model.")
-    if catalog.get(raw) is None:
+    if raw not in catalog.routes:
         return f"Task {index} route {raw!r} is not in delegation.routes."
     return None
 
