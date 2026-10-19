@@ -415,7 +415,7 @@ def _build_children(
     top_role: str, max_iterations: int, parent_agent,
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
 ) -> tuple[list[tuple], Optional[str]]:
-    """Build every child on the main thread (construction is not thread-safe), task i on ``routes[i]``;
+    """Build every child on the main thread (construction is not thread-safe);
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
     from tools.delegation_live_log import wrap_progress_callback
     from tools.delegation_output_schema import append_output_contract
@@ -434,7 +434,7 @@ def _build_children(
             )
         except ValueError as exc:
             return [], str(exc)
-        child._delegate_route = routes[i].route_id  # every result entry reports the route it ran on
+        child._delegate_route = routes[i].route_id
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema
@@ -539,8 +539,6 @@ def delegate_task(
     if not err:
         task_images, err = _coerce_task_images(task_list, images)
     if not err:
-        # Every task's route resolves here, before anything is charged, transcribed or built. An explicit-pin
-        # preflight failure (e.g. pinned delegation.command missing from PATH) refuses the spawn loudly (#80450).
         routes, err = plan_child_routes(task_list, routing_cfg=routing_cfg, parent_agent=parent_agent)
     if not err:
         err = _oneshot_spawn_budget(parent_agent, len(task_list))
@@ -669,7 +667,6 @@ def _build_dynamic_schema_overrides() -> dict:
     overrides_params["properties"] = {k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()}
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
 
-    # The static schema never carries `route`: its enum is config data, so only this per-call rebuild adds it.
     route_property = route_schema_property(load_route_catalog())
     tasks = overrides_params["properties"]["tasks"]
     item_properties = {

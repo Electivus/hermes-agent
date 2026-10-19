@@ -275,8 +275,8 @@ class SubagentLifecycleService:
         self._parent_agent_resolver = parent_agent_resolver
 
     def routes(self) -> tuple[str, ...]:
-        """Route ids ``delegate_task`` accepts right now (``delegation.routes``, operator order, malformed entries
-        dropped). Read-only and needs no active parent: plugins read the operator's catalog, never extend it."""
+        """Route ids ``delegate_task`` accepts right now: ``delegation.routes`` in operator order, malformed and
+        repeated entries dropped. Needs no active parent."""
         from tools.delegate_tool_routes import load_route_catalog
         return load_route_catalog().ids
 

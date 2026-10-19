@@ -1,5 +1,3 @@
-"""A temp HERMES_HOME holding third-party plugins, shared by the plugin-host tests of several areas."""
-
 import hermes_yaml as yaml
 
 from hermes_cli import plugins as plugins_mod

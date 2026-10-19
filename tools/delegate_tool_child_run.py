@@ -34,7 +34,6 @@ def _str_or_none(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 def _route_fields(child: Any) -> dict[str, Any]:
-    """What a result entry says the child ran on: its model, plus the delegation.routes id it was built on."""
     fields = {"model": _str_or_none(getattr(child, "model", None))}
     route = _str_or_none(getattr(child, "_delegate_route", None))
     if route:

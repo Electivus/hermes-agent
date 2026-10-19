@@ -1,10 +1,4 @@
-"""Operator-owned routes for ``delegate_task``.
-
-A route is one ``(provider, model, effort?)`` triple the operator lists in ``delegation.routes`` as the canonical id
-``provider/model[@effort]``. A task may name one with ``route``; that child then runs on that provider, model and
-reasoning effort. The model can only pick an id the operator listed: the schema advertises them as an enum, and
-dispatch re-reads the live list, so a removed route stops working on the next call.
-"""
+"""Per-task routes for delegate_task: the delegation.routes catalog, route-id parsing and per-task resolution."""
 
 from __future__ import annotations
 
@@ -20,19 +14,15 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 ROUTE_EFFORTS = frozenset(VALID_REASONING_EFFORTS) | {"none"}
 _PROVIDER_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
-# Malformed entries are re-read on every schema rebuild; warn about each one once per process.
 _WARNED_ENTRIES: set[str] = set()
 
 
 class RouteError(ValueError):
-    """A route id that does not parse as ``provider/model[@effort]``."""
+    pass
 
 
 @dataclasses.dataclass(frozen=True)
 class Route:
-    """One operator-listed route. It has no field for an endpoint, key, api_mode, command or request overrides: those
-    come from the provider's own configuration when the route resolves."""
-
     provider: str
     model: str
     effort: Optional[str] = None
@@ -42,8 +32,6 @@ class Route:
         return f"{self.provider}/{self.model}" + (f"@{self.effort}" if self.effort else "")
 
     def routing_block(self) -> dict[str, str]:
-        """The config block this route resolves from and owns its recovery policy: provider and model only, so the
-        child gets no ``delegation.base_url``/``api_key``/``request_overrides`` and no fallback chain."""
         return {"provider": self.provider, "model": self.model}
 
     def reasoning_config(self) -> Optional[dict[str, Any]]:
@@ -77,10 +65,8 @@ def parse_route_id(text: Any) -> Route:
 
 @dataclasses.dataclass(frozen=True)
 class RouteCatalog:
-    """The parsed ``delegation.routes``: canonical id -> Route, in operator order, first duplicate wins."""
-
     routes: Mapping[str, Route] = dataclasses.field(default_factory=dict)
-    malformed: int = 0  # configured entries dropped because they do not parse
+    malformed: int = 0
 
     @property
     def ids(self) -> tuple[str, ...]:
@@ -97,11 +83,6 @@ def _warn_once(key: str, message: str, *args: Any) -> None:
 
 
 def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> RouteCatalog:
-    """Parse ``delegation.routes`` (``delegation_cfg`` None reads the live delegation config).
-
-    Tolerant: a non-list value is an empty catalog, a malformed entry is dropped with a warning and never advertised,
-    and a repeated id keeps its first entry. Cheap, because it runs on every schema rebuild.
-    """
     if delegation_cfg is None:
         from tools.delegate_tool_config import _cfg
         delegation_cfg = _cfg()
@@ -126,12 +107,10 @@ def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> Ro
 
 @dataclasses.dataclass(frozen=True)
 class ChildRoute:
-    """Everything one child is built on. Tasks of one call that name the same route share one ChildRoute."""
-
-    creds: Mapping[str, Any]  # the _resolve_delegation_credentials bundle
-    routing_cfg: Mapping[str, Any]  # the config block that owns this route's fallback policy
-    route_id: Optional[str] = None  # None = the call's default route (delegation.* or an internal credentials_cfg)
-    reasoning_config: Optional[dict[str, Any]] = None  # None = delegation.reasoning_effort, else the parent's
+    creds: Mapping[str, Any]
+    routing_cfg: Mapping[str, Any]
+    route_id: Optional[str] = None
+    reasoning_config: Optional[dict[str, Any]] = None
 
     @property
     def model(self) -> Optional[str]:
@@ -142,7 +121,6 @@ class ChildRoute:
         return self.creds.get("provider")
 
     def build_kwargs(self) -> dict[str, Any]:
-        """The ``_build_child_agent`` kwargs for this route; the one translation from a bundle into a child."""
         creds = self.creds
         return {
             "model": creds["model"], "override_provider": creds["provider"], "override_base_url": creds["base_url"],
@@ -153,7 +131,6 @@ class ChildRoute:
         }
 
     def identity(self, parent_agent: Any) -> dict[str, Optional[str]]:
-        """``{model, provider, route}`` as the child will run, for records written before the child exists."""
         model = self.model or getattr(parent_agent, "model", None)
         provider = self.provider or getattr(parent_agent, "provider", None)
         return {
@@ -164,15 +141,11 @@ class ChildRoute:
 
 
 def default_child_route(routing_cfg: Mapping[str, Any], parent_agent: Any) -> ChildRoute:
-    """The route a config block names (``delegation.*``, ``auxiliary.review``, a lifecycle provider pin). Raises
-    ValueError with a user-facing message."""
     from tools.delegate_tool import _resolve_delegation_credentials
     return ChildRoute(_resolve_delegation_credentials(routing_cfg, parent_agent), routing_cfg)
 
 
 def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
-    """Resolve one catalog route from its provider and model alone, on the caller's thread (never inside the
-    child-construction lock: resolution reads auth state and may refresh a token over the network)."""
     from tools.delegate_tool import _resolve_delegation_credentials
     from tools.delegate_tool_config import ProviderUnavailableError
     block = route.routing_block()
@@ -199,13 +172,6 @@ def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]
 def plan_child_routes(
     task_list: Sequence[Mapping[str, Any]], *, routing_cfg: Mapping[str, Any], parent_agent: Any,
 ) -> tuple[list[ChildRoute], Optional[str]]:
-    """One ChildRoute per task, or ``([], error)`` naming every failing task.
-
-    Every task's route is checked against the live catalog before any resolution, then each distinct route is
-    resolved once in first-appearance order and every failure is reported together. The default route resolves only
-    when some task omits ``route``, so a fully routed call does not depend on ``delegation.provider`` being usable; a
-    call with no routed task keeps the default route's own error text.
-    """
     catalog = load_route_catalog()
     routed = {i: task["route"] for i, task in enumerate(task_list) if "route" in task}
     problems = [problem for i, raw in routed.items() if (problem := _route_problem(i, raw, catalog))]
@@ -247,8 +213,6 @@ DESCRIPTION_TAIL_WITH_ROUTES = (
 
 
 def route_schema_property(catalog: RouteCatalog) -> Optional[dict[str, Any]]:
-    """The ``tasks.items.properties.route`` fragment, or None when the catalog is empty (no field, zero tokens). Enum
-    order is the operator's, so the bytes are a pure function of config.yaml."""
     if not catalog.routes:
         return None
     return {"type": "string", "enum": list(catalog.ids), "description": ROUTE_DESCRIPTION}

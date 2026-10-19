@@ -1,5 +1,3 @@
-"""SubagentLifecycleService.routes(): plugins read the operator's delegation.routes, in process or across the host."""
-
 import json
 import os
 

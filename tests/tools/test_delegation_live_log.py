@@ -417,7 +417,6 @@ def _manifest(delegation_id):
 
 
 def test_manifest_records_each_tasks_identity_and_the_shared_one_on_top():
-    """Per-task model/provider/route; the top level names each only when every task shares it."""
     uniform = {"model": "openrouter/gpt-4o", "provider": "openrouter", "route": None}
     routed = {"model": "claude-opus-5-5", "provider": "anthropic", "route": "anthropic/claude-opus-5-5@xhigh"}
     for identities, top in (
@@ -435,7 +434,6 @@ def test_manifest_records_each_tasks_identity_and_the_shared_one_on_top():
 
 
 def test_manifest_top_level_model_follows_what_the_tasks_ran_on():
-    """A child moved by its fallback chain reports another model; the top level is recomputed from the tasks."""
     inherited = {"model": "original-model", "provider": "openrouter", "route": None}
     tasks = [{"goal": "task 1"}, {"goal": "task 2"}]
     both = create_live_transcripts(tasks, identities=[inherited, inherited])[0]

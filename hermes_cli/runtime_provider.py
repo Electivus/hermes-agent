@@ -1002,12 +1002,10 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
 
 
 def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_base_url) -> Optional[dict[str, Any]]:
-    """An "auto" request under a config whose provider is "auto"/unset and whose base_url is a custom/local endpoint
-    routes through the OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
-    and send the request to a cloud API. A request that names a provider (a route, ``--provider``,
-    ``delegation.provider``) is not that config's endpoint and resolves on its own rung. Only non-cloud roots take
-    the bypass; match on HOST, not substring, so a look-alike (api.anthropic.com.attacker.test) cannot leak a cloud
-    credential."""
+    """provider "auto"/unset with a config base_url at a custom/local endpoint routes through the
+    OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
+    and send the request to a cloud API. Only non-cloud roots take the bypass; match on HOST, not
+    substring, so a look-alike (api.anthropic.com.attacker.test) cannot leak a cloud credential."""
     model_cfg = _get_model_config()
     cfg_base_url = str(model_cfg.get("base_url") or "").strip()
     if (requested_provider not in ("auto", "") or not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")

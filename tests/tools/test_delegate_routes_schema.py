@@ -1,5 +1,3 @@
-"""`delegation.routes` is the operator's route catalog; the per-task `route` field is advertised only from it."""
-
 import json
 
 import pytest

@@ -321,9 +321,6 @@ _NATIVE_SDK_PROVIDERS = frozenset({"bedrock", "vertex", "google", "google-genai"
 _EXPLICIT_API_MODES = frozenset({"chat_completions", "codex_responses", "anthropic_messages"})
 
 class ProviderUnavailableError(ValueError):
-    """A pinned provider that resolves to no usable child bundle. The message is worded for ``delegation.provider``;
-    ``detail`` is the bare cause, so another config owner (``delegation.routes``) can word its own advice."""
-
     def __init__(self, message: str, *, detail: str) -> None:
         super().__init__(message)
         self.detail = detail
@@ -504,8 +501,6 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg: Any, pinned: bool) 
 def _child_reasoning_config(
     parent_agent, delegation_cfg: dict, override_reasoning_config: Optional[dict[str, Any]],
 ) -> Optional[dict[str, Any]]:
-    """Route effort > delegation.reasoning_effort > parent. Keeps the raw config value: a YAML ``false`` must
-    disable thinking, not coerce to "" and inherit."""
     if override_reasoning_config is not None:
         return override_reasoning_config
     delegation_effort = delegation_cfg.get("reasoning_effort")
@@ -544,11 +539,8 @@ def _resolve_child_runtime(
     else:
         effective_provider = getattr(parent_agent, "provider", None)
         effective_base_url, parent_api_key = _inherit_parent_endpoint(parent_agent, parent_agent.base_url, parent_api_key)
-    # api_mode: each provider has its own wire (MiniMax anthropic_messages, DeepSeek chat_completions), so a child on
-    # another provider derives its own (None) instead of inheriting the parent's, which 404s (#20558). A pinned
-    # provider derives too even when it is the parent's: the pin may name another model on another wire. Nous Portal
-    # is dual-wire within one provider (anthropic/* → Messages, else chat_completions) and agent_init honors an
-    # explicit api_mode above its nous branch, so its wire is derived here before construction.
+    # Providers speak different wires (MiniMax anthropic_messages, DeepSeek chat_completions; Nous Portal both, by
+    # model), and a child sent on the parent's wire 404s (#20558).
     _parent_provider = getattr(parent_agent, "provider", None) or ""
     if override_api_mode:
         effective_api_mode = override_api_mode

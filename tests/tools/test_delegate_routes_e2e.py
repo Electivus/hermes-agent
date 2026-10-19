@@ -1,5 +1,3 @@
-"""Routes resolve through the real config and runtime-provider chain (temp HERMES_HOME, no resolution mocks)."""
-
 import json
 import threading
 from unittest.mock import MagicMock, patch
@@ -122,7 +120,7 @@ delegation:
 
     assert (child["provider"], child["model"], child["base_url"]) == (
         "openrouter", "qwen/qwen3-coder", "https://openrouter.ai/api/v1")
-    assert child["api_mode"] == "chat_completions"  # OpenRouter's wire, not the parent's anthropic_messages
+    assert child["api_mode"] == "chat_completions"
 
 
 def test_named_route_resolves_its_provider_under_an_auto_config_with_a_local_endpoint(monkeypatch, tmp_path):

@@ -109,8 +109,6 @@ def _delegation_config() -> dict:
 
 
 def _rejects_model(model: str, results) -> bool:
-    """True when a result carries a model-not-found phrase AND ``model`` in the same text, so a stale task failing
-    on a removed model is not mis-attributed to the current config."""
     model = model.lower()
     if not model:
         return False
@@ -120,8 +118,6 @@ def _rejects_model(model: str, results) -> bool:
 
 
 def _route_model_rejected_lines(results) -> list[str]:
-    """One line per route whose provider rejected the model its children sent. Read from each result's own ``route``
-    and ``model`` (the provider-normalized id), so a replayed completion renders the same after config edits."""
     from tools.delegate_tool_routes import parse_route_id
     lines = []
     for route_id, model in dict.fromkeys((r["route"], r.get("model") or "") for r in results if r.get("route")):
@@ -134,8 +130,6 @@ def _route_model_rejected_lines(results) -> list[str]:
 
 
 def _delegation_model_not_found_notice(results) -> list[str] | None:
-    """Model-rejection notice lines, or None (fail-open) — once per batch. A routed child's rejection is attributed
-    to its route; the delegation.model notice covers only the unrouted children it names."""
     config = _delegation_config()
     results = [r for r in results or [] if isinstance(r, dict)]
     lines = _route_model_rejected_lines(results)
@@ -251,10 +245,7 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
     if evt.get("error") and not results:
         lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]
         return "\n".join(lines)
-    # Model-rejection notice BEFORE the per-task wall — a rejected model fails
-    # its tasks before any work and must not stay buried.
     lines += _notice_lines(results)
-    # The record's model is written at dispatch; a child's fallback can still move it, so the results decide.
     models_differ = len(set(filter(None, (r.get("model") for r in results)))) > 1
     for r in sorted(results, key=lambda x: x.get("task_index", 0)):
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)

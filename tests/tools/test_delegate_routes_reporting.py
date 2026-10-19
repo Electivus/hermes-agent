@@ -1,5 +1,3 @@
-"""A batch whose children run different models reports each child's own model and route."""
-
 import json
 import threading
 from dataclasses import fields
@@ -65,7 +63,6 @@ def test_background_completion_names_each_tasks_route_and_any_differing_model():
     assert f"TASK 1/2: task 0  (status=completed, route={high}" in same_model
     assert f"TASK 2/2: task 1  (status=completed, route={xhigh}" in same_model
 
-    # The record was written before a child's fallback moved it to another model; the results say what ran.
     fell_back = format_process_notification(_completion("claude-opus-5-5", [
         _result(0, "claude-opus-5-5"), _result(1, "deepseek-chat"),
     ]))
@@ -180,10 +177,10 @@ def test_route_model_rejection_is_attributed_to_the_route_not_delegation_model(m
 
 
 def test_route_rejection_notice_names_the_model_the_child_sent_whatever_the_live_catalog_says(monkeypatch):
-    route = "anthropic/claude-sonnet-4.5"  # the provider normalizes it to claude-sonnet-4-5 before sending
+    route = "anthropic/claude-sonnet-4.5"
     rejected = _result(0, "claude-sonnet-4-5", route=route, status="failed", summary=None,
                        error="HTTP 400: claude-sonnet-4-5 is not a valid model ID")
-    monkeypatch.setattr(notifications, "_delegation_config", lambda: {"routes": []})  # revoked since dispatch
+    monkeypatch.setattr(notifications, "_delegation_config", lambda: {"routes": []})
 
     text = format_process_notification(_completion("claude-sonnet-4-5", [rejected]))
     assert (f'SUBAGENT ROUTE MODEL REJECTED: route "{route}" (delegation.routes): provider "anthropic" rejected '

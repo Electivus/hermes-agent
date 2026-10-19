@@ -18,6 +18,6 @@ def _unit(*models):
 def test_completion_model_is_the_model_the_children_run_on(monkeypatch):
     seen = []
     monkeypatch.setattr(async_delegation, "dispatch_async_delegation_batch", lambda **kw: seen.append(kw["model"]))
-    _dispatch_unit(_unit("inherited/model"), None, None, {})  # delegation.model blank: children inherit the parent's
+    _dispatch_unit(_unit("inherited/model"), None, None, {})
     _dispatch_unit(_unit("configured/model", "configured/model"), None, None, {})
     assert seen == ["inherited/model", "configured/model"]

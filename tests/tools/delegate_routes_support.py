@@ -1,6 +1,3 @@
-"""The delegate_task harness the per-task route tests share: a real registry dispatch whose only substitutes are
-the runtime-provider resolver and the AIAgent class."""
-
 import json
 import threading
 from unittest.mock import MagicMock, patch
@@ -18,7 +15,6 @@ RUNTIMES = {
                      "api_key": "sk-codex"},
     "xai-oauth": {"provider": "xai-oauth", "api_mode": "codex_responses", "base_url": "https://xai.invalid",
                   "api_key": "sk-xai"},
-    # Same provider as the parent, and the runtime leaves the wire unset.
     "openrouter": {"provider": "openrouter", "api_mode": None, "base_url": "https://openrouter.invalid/v1",
                    "api_key": "sk-openrouter"},
 }
@@ -27,7 +23,7 @@ PARENT_CHAIN = [{"provider": "deepseek", "model": "deepseek-chat"}]
 
 def parent_agent():
     parent = MagicMock()
-    parent._delegate_depth = 1  # depth > 0 runs the batch synchronously through the registry handler
+    parent._delegate_depth = 1
     parent._active_children = []
     parent._active_children_lock = threading.Lock()
     parent._session_db = None

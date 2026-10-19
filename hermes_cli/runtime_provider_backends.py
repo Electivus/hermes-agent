@@ -191,8 +191,6 @@ def _resolve_openrouter_runtime(
     cfg_api_mode = rp._parse_api_mode(model_cfg.get("api_mode"))
     # Explicit "custom" stays "custom" rather than relabeling to "openrouter".
     if requested_norm != "custom":
-        # A persisted api_mode belongs to the config's own endpoint and provider: an OpenRouter request made under
-        # another provider's config (a route from an anthropic_messages parent) detects its own wire.
         api_mode = cfg_api_mode if use_config_base_url else rp._configured_api_mode("openrouter", model_cfg)
         return rp._runtime("openrouter", api_mode or rp._detect_api_mode_for_url(base_url) or "chat_completions", base_url,
                            api_key, source=source)

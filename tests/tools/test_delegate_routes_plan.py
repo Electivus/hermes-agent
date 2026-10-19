@@ -1,5 +1,3 @@
-"""Per-task routes: every route is resolved before any child exists, and each child runs on its own route."""
-
 import pytest
 
 from tests.tools.delegate_routes_support import ASTRA, GROK, OPUS, RUNTIMES, Harness
@@ -82,13 +80,12 @@ def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_pa
     ids=["route", "delegation.provider"],
 )
 def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(monkeypatch, tmp_path, config, task):
-    # The parent runs codex_responses on openrouter; this runtime names no wire (azure-foundry resolves that way).
     harness = Harness(monkeypatch, tmp_path, {**config, "oneshot_max_children": 10})
     harness.call([task])
 
     (child,) = harness.built
     assert (child["provider"], child["model"]) == ("openrouter", "qwen/qwen3-coder")
-    assert child["api_mode"] is None  # AIAgent derives it from the provider, endpoint and model
+    assert child["api_mode"] is None
 
 
 @pytest.mark.parametrize(
@@ -97,7 +94,7 @@ def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(monke
         ("low", OPUS, {"enabled": True, "effort": "xhigh"}),
         ("low", "anthropic/claude-opus-5-5", {"enabled": True, "effort": "low"}),
         ("low", "anthropic/claude-opus-5-5@none", {"enabled": False}),
-        ("", "anthropic/claude-opus-5-5", {"enabled": True, "effort": "medium"}),  # the parent's
+        ("", "anthropic/claude-opus-5-5", {"enabled": True, "effort": "medium"}),
     ],
 )
 def test_route_effort_beats_delegation_effort_which_beats_the_parent(
