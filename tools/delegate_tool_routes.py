@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
 
@@ -118,6 +118,96 @@ def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> Ro
             continue
         routes.setdefault(route.id, route)
     return RouteCatalog(routes)
+
+
+@dataclasses.dataclass(frozen=True)
+class ChildRoute:
+    """Everything one child is built on. Tasks of one call that name the same route share one ChildRoute."""
+
+    creds: Mapping[str, Any]  # the _resolve_delegation_credentials bundle
+    routing_cfg: Mapping[str, Any]  # the config block that owns this route's fallback policy
+    route_id: Optional[str] = None  # None = the call's default route (delegation.* or an internal credentials_cfg)
+    reasoning_config: Optional[dict[str, Any]] = None  # None = delegation.reasoning_effort, else the parent's
+
+    @property
+    def model(self) -> Optional[str]:
+        return self.creds.get("model")
+
+    @property
+    def provider(self) -> Optional[str]:
+        return self.creds.get("provider")
+
+    def build_kwargs(self) -> dict[str, Any]:
+        """The ``_build_child_agent`` kwargs for this route; the one translation from a bundle into a child."""
+        creds = self.creds
+        return {
+            "model": creds["model"], "override_provider": creds["provider"], "override_base_url": creds["base_url"],
+            "override_api_key": creds["api_key"], "override_api_mode": creds["api_mode"],
+            "override_request_overrides": creds.get("request_overrides"),
+            "override_acp_command": creds.get("command"), "override_acp_args": creds.get("args"),
+            "routing_cfg": self.routing_cfg, "override_reasoning_config": self.reasoning_config,
+        }
+
+
+def default_child_route(routing_cfg: Mapping[str, Any], parent_agent: Any) -> ChildRoute:
+    """The route a config block names (``delegation.*``, ``auxiliary.review``, a lifecycle provider pin). Raises
+    ValueError with a user-facing message."""
+    from tools.delegate_tool import _resolve_delegation_credentials
+    return ChildRoute(_resolve_delegation_credentials(routing_cfg, parent_agent), routing_cfg)
+
+
+def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
+    """Resolve one catalog route from its provider and model alone, on the caller's thread (never inside the
+    child-construction lock: resolution reads auth state and may refresh a token over the network)."""
+    from tools.delegate_tool import _resolve_delegation_credentials
+    block = route.routing_block()
+    creds = dict(_resolve_delegation_credentials(block, parent_agent))
+    if not creds.get("api_mode"):
+        # Child construction inherits the parent's api_mode when the provider matches and none is given, which
+        # puts a same-provider route on another model's wire.
+        from hermes_cli.providers import determine_api_mode
+        creds["api_mode"] = determine_api_mode(creds["provider"], creds.get("base_url") or "", creds["model"])
+    return ChildRoute(creds, block, route.id, route.reasoning_config())
+
+
+def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]:
+    if not isinstance(raw, str) or not raw:
+        return f"Task {index} 'route' must be a non-empty string naming one of delegation.routes."
+    if not catalog.routes:
+        return (f"Task {index} names route {raw!r}, but delegation.routes is empty. Omit 'route' to use the "
+                "default subagent model.")
+    if catalog.get(raw) is None:
+        return f"Task {index} route {raw!r} is not in delegation.routes."
+    return None
+
+
+def plan_child_routes(
+    task_list: Sequence[Mapping[str, Any]], *, routing_cfg: Mapping[str, Any], parent_agent: Any,
+) -> tuple[list[ChildRoute], Optional[str]]:
+    """One ChildRoute per task, or ``([], error)`` naming every failing task.
+
+    Every task's route is checked against the live catalog before any resolution, then each distinct route is
+    resolved once in first-appearance order. The default route resolves only when some task omits ``route``, so a
+    fully routed call does not depend on ``delegation.provider`` being usable.
+    """
+    catalog = load_route_catalog()
+    routed = {i: task["route"] for i, task in enumerate(task_list) if "route" in task}
+    problems = [problem for i, raw in routed.items() if (problem := _route_problem(i, raw, catalog))]
+    if problems:
+        configured = f" Configured: {', '.join(catalog.ids)}." if catalog.routes else ""
+        return [], " ".join(problems) + configured
+    keys = [routed.get(i) for i in range(len(task_list))]
+    resolved: dict[Optional[str], ChildRoute] = {}
+    for key in dict.fromkeys(keys):
+        try:
+            resolved[key] = (default_child_route(routing_cfg, parent_agent) if key is None
+                             else resolve_route(catalog.routes[key], parent_agent))
+        except ValueError as exc:
+            if key is None:
+                return [], str(exc)
+            indexes = ", ".join(str(i) for i, k in enumerate(keys) if k == key)
+            return [], f"Task(s) {indexes}: route {key!r} (delegation.routes) cannot be used: {exc}"
+    return [resolved[key] for key in keys], None
 
 
 ROUTE_DESCRIPTION = (

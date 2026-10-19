@@ -488,11 +488,28 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg: Any, pinned: bool) 
         pinned=pinned, owner="delegation")
 
 
+def _child_reasoning_config(
+    parent_agent, delegation_cfg: dict, override_reasoning_config: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Route effort > delegation.reasoning_effort > parent. Keeps the raw config value: a YAML ``false`` must
+    disable thinking, not coerce to "" and inherit."""
+    if override_reasoning_config is not None:
+        return override_reasoning_config
+    delegation_effort = delegation_cfg.get("reasoning_effort")
+    if delegation_effort or delegation_effort is False:
+        from hermes_constants import parse_reasoning_effort
+        parsed = parse_reasoning_effort(delegation_effort)
+        if parsed is not None:
+            return parsed
+        logger.warning("Unknown delegation.reasoning_effort '%s', inheriting parent level", delegation_effort)
+    return getattr(parent_agent, "reasoning_config", None)
+
+
 def _resolve_child_runtime(
     parent_agent, delegation_cfg: dict, parent_api_key: Any, *, model: Optional[str], override_provider: Optional[str],
     override_base_url: Optional[str], override_api_key: Optional[str], override_api_mode: Optional[str],
     override_acp_command: Optional[str], override_acp_args: Optional[list[str]],
-    routing_cfg: Optional[dict[str, Any]] = None,
+    routing_cfg: Optional[dict[str, Any]] = None, override_reasoning_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Child credentials, transport and routing (config override > parent inherit) as ``AIAgent`` kwargs. Rules that
     are easy to break: api_mode is re-derived (not inherited) when the child's provider differs from the parent's
@@ -568,27 +585,12 @@ def _resolve_child_runtime(
             getattr(parent_agent, "requested_provider", None) or effective_provider
         )
 
-    # Reasoning: delegation.reasoning_effort > parent. Keep the raw value — a
-    # YAML ``false`` must disable thinking, not coerce to "" and inherit.
-    child_reasoning = getattr(parent_agent, "reasoning_config", None)
-    try:
-        delegation_effort = delegation_cfg.get("reasoning_effort")
-        if delegation_effort or delegation_effort is False:
-            from hermes_constants import parse_reasoning_effort
-            parsed = parse_reasoning_effort(delegation_effort)
-            if parsed is None:
-                logger.warning("Unknown delegation.reasoning_effort '%s', inheriting parent level", delegation_effort)
-            else:
-                child_reasoning = parsed
-    except Exception as exc:
-        logger.debug("Could not load delegation reasoning_effort: %s", exc)
-
     kwargs: dict[str, Any] = {
         "base_url": effective_base_url, "api_key": override_api_key or parent_api_key, "model": effective_model,
         "provider": effective_provider, "requested_provider": effective_requested_provider,
         "capabilities": _inherit_parent_capabilities(parent_agent, override_provider, override_base_url),
         "api_mode": effective_api_mode, "acp_command": effective_acp_command, "acp_args": effective_acp_args,
-        "reasoning_config": child_reasoning,
+        "reasoning_config": _child_reasoning_config(parent_agent, delegation_cfg, override_reasoning_config),
         # Resolve routing and recovery policy from the same configuration owner. A pinned provider, endpoint, or
         # model never borrows the parent's chain; an explicitly declared child chain still remains available.
         "fallback_model": _resolve_child_fallback_chain(

@@ -98,7 +98,7 @@ def _batch(parent, *children):
     parent._active_children.extend(children)
     return _Batch(
         task_list=tasks, children=[(i, tasks[i], child) for i, child in enumerate(children)], parent_agent=parent,
-        creds={"model": children[0].model}, context=None, top_role="leaf", max_children=len(children),
+        context=None, top_role="leaf", max_children=len(children),
         live_deleg_id=None, live_writers=[], live_paths=[], origin_wake_sid="",
         origin_ui_session_id="", origin_owner_transport=None,
         origin_owner_session_record=None, origin_session_history_delivery=False, overall_start=time.monotonic(),
