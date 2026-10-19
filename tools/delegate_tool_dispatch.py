@@ -21,6 +21,7 @@ from tools.delegate_tool_progress import (
 )
 from tools.delegate_tool_registry import _capture_gateway_steer_authority
 from tools.delegate_tool_results import _finalize_child_results
+from tools.delegate_tool_routes import unit_model_label
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
 
@@ -397,8 +398,7 @@ def _dispatch_unit(unit: _Batch, unit_id: Optional[str], slot_key: Optional[str]
         # Call-wide goals: completion formatting indexes them by task_index.
         goals=[t["goal"] for t in unit.task_list], context=unit.context,
         toolsets=None,  # metadata for the completion block only; subagents inherit the parent's toolsets
-        role=unit.top_role, model=next(
-            (m for c in child_agents if (m := _str_or_none(getattr(c, "model", None)))), None),
+        role=unit.top_role, model=unit_model_label(_str_or_none(getattr(c, "model", None)) for c in child_agents),
         runner=lambda: _execute_and_aggregate(unit, honor_parent_interrupt=False),
         interrupt_fn=_interrupt, delegation_id=unit_id, slot_key=slot_key,
         task_indexes=[i for (i, _, _) in unit.children] if len(unit.children) < len(unit.task_list) else None,

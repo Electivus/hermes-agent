@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from contextlib import suppress
 
+from tools.delegate_tool_routes import MIXED_MODEL_LABEL, load_route_catalog
+
 _DONE = ("completed", "success")
 _REASON_STATUS = {"lost": "marked lost because the process backend disappeared", "failed_start": "failed to start"}
 
@@ -108,11 +110,10 @@ def _delegation_config() -> dict:
         return {}
 
 
-def _delegation_model_not_found(results, config) -> bool:
-    """True when a result reflects a config-level model_not_found rejection: needs a
-    model-not-found phrase AND the currently-configured model name in the same text,
-    so a stale task failing on a removed model is not mis-attributed to the config."""
-    model = str((config or {}).get("model") or "").lower()
+def _rejects_model(model: str, results) -> bool:
+    """True when a result carries a model-not-found phrase AND ``model`` in the same text, so a stale task failing
+    on a removed model is not mis-attributed to the current config."""
+    model = model.lower()
     if not model:
         return False
     patterns = _model_not_found_patterns()
@@ -120,14 +121,36 @@ def _delegation_model_not_found(results, config) -> bool:
     return any(model in text and any(p in text for p in patterns) for text in texts)
 
 
+def _delegation_model_not_found(results, config) -> bool:
+    """True when a result reflects a rejection of the currently-configured delegation.model."""
+    return _rejects_model(str((config or {}).get("model") or ""), results)
+
+
+def _route_model_rejected_lines(results, config) -> list[str]:
+    """One line per route (still in the live delegation.routes) whose model its provider rejected."""
+    catalog = load_route_catalog(config)
+    lines = []
+    for route_id in dict.fromkeys(r["route"] for r in results if r.get("route")):
+        route = catalog.get(route_id)
+        if route is not None and _rejects_model(route.model, [r for r in results if r.get("route") == route_id]):
+            lines.append(
+                f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
+                f'"{route.provider}" rejected model "{route.model}". A route has no fallback chain; fix the id in '
+                "delegation.routes or name another route.")
+    return lines
+
+
 def _delegation_model_not_found_notice(results) -> list[str] | None:
-    """Config-level model_not_found notice lines, or None (fail-open) — once per batch."""
+    """Config-level model_not_found notice lines, or None (fail-open) — once per batch. A routed child's rejection
+    is attributed to its route; the delegation.model notice considers only unrouted children."""
     config = _delegation_config()
-    if not _delegation_model_not_found(results, config):
-        return None
+    results = [r for r in results or [] if isinstance(r, dict)]
+    lines = _route_model_rejected_lines(results, config)
+    if not _delegation_model_not_found([r for r in results if not r.get("route")], config):
+        return lines or None
     model = config.get("model") or "?"
     provider = config.get("provider") or "configured provider"
-    lines = [
+    lines += [
         "⚠ SUBAGENT MODEL REJECTED: the configured Subagent Model "
         f'"{model}" was rejected by provider "{provider}" '
         "(HTTP 400: not a valid model ID).",
@@ -232,12 +255,15 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
     # Config-level rejection notice BEFORE the per-task wall — a rejected
     # delegation model fails every task identically and must not stay buried.
     lines += _notice_lines(results)
+    # A mixed unit's preamble says "Model: mixed", so each task names its own.
+    mixed = evt.get("model") == MIXED_MODEL_LABEL
     for r in sorted(results, key=lambda x: x.get("task_index", 0)):
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
         r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
         icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
+                  + (f", model={r['model']}" if mixed and r.get("model") else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))

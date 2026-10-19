@@ -434,6 +434,7 @@ def _build_children(
             )
         except ValueError as exc:
             return [], str(exc)
+        child._delegate_route = routes[i].route_id  # every result entry reports the route it ran on
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema
@@ -563,8 +564,7 @@ def delegate_task(
 
     from tools.delegation_live_log import create_live_transcripts
     live_deleg_id, live_writers, live_paths = create_live_transcripts(
-        task_list, context, model=routes[0].model, provider=routes[0].provider,
-        home=_live_home,
+        task_list, context, identities=[route.identity(parent_agent) for route in routes], home=_live_home,
     )
     _announce_batch(parent_agent, len(task_list), live_deleg_id)
     origin = _capture_origin()
