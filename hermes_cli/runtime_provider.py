@@ -1006,9 +1006,11 @@ def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_b
     OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
     and send the request to a cloud API. Only non-cloud roots take the bypass; match on HOST, not
     substring, so a look-alike (api.anthropic.com.attacker.test) cannot leak a cloud credential."""
+    if requested_provider not in ("auto", ""):
+        return None
     model_cfg = _get_model_config()
     cfg_base_url = str(model_cfg.get("base_url") or "").strip()
-    if (requested_provider not in ("auto", "") or not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")
+    if (not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")
             or any(base_url_host_matches(cfg_base_url, host) for host in _LOCAL_BYPASS_CLOUD_HOSTS)):
         return None
     return _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url)
