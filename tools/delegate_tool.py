@@ -56,6 +56,7 @@ from tools.delegate_tool_toolsets import (
 from tools.delegate_tool_results import (
     _apply_summary_budget, _build_child_preserving_parent_tools, _run_child_lifecycle, _summarize_tool_arguments,
 )
+from tools.delegate_tool_routes import DESCRIPTION_TAIL_WITH_ROUTES, load_route_catalog, route_schema_property
 
 _ROLES = frozenset({"leaf", "orchestrator"})
 
@@ -596,7 +597,7 @@ def delegate_task(
 
 # ── OpenAI function-calling schema ──────────────────────────────────────────
 
-def _build_top_level_description(*, independent_completions=None) -> str:
+def _build_top_level_description(*, independent_completions=None, routes_enabled: bool = False) -> str:
     """delegate_task description: ONLY guidance stated nowhere else in the schema
     (limits live in the 'tasks' parameter description, rebuilt per get_definitions())."""
     try:
@@ -621,7 +622,8 @@ def _build_top_level_description(*, independent_completions=None) -> str:
         "each ungrouped task / `group` returns on its own"
         if independent_completions else "one message per call"
     )
-    return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + _DESCRIPTION_TAIL
+    tail = DESCRIPTION_TAIL_WITH_ROUTES if routes_enabled else _DESCRIPTION_TAIL
+    return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + tail
 
 _DESCRIPTION_HEAD = (
     "Spawn subagents in isolated contexts; each gets its own conversation, terminal session, and toolset, and only its "
@@ -679,14 +681,20 @@ def _build_dynamic_schema_overrides() -> dict:
     overrides_params["properties"] = {k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()}
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
 
-    if not independent_completions:
-        tasks = overrides_params["properties"]["tasks"]
-        tasks["items"] = {**tasks["items"], "properties": {
-            k: v for k, v in tasks["items"]["properties"].items() if k != "group"
-        }}
+    # The static schema never carries `route`: its enum is config data, so only this per-call rebuild adds it.
+    route_property = route_schema_property(load_route_catalog())
+    tasks = overrides_params["properties"]["tasks"]
+    item_properties = {
+        k: v for k, v in tasks["items"]["properties"].items() if independent_completions or k != "group"
+    }
+    if route_property is not None:
+        item_properties["route"] = route_property
+    tasks["items"] = {**tasks["items"], "properties": item_properties}
 
     return {
-        "description": _build_top_level_description(independent_completions=independent_completions),
+        "description": _build_top_level_description(
+            independent_completions=independent_completions, routes_enabled=route_property is not None,
+        ),
         "parameters": overrides_params,
     }
 
