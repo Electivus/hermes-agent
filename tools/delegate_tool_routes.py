@@ -182,13 +182,7 @@ def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
     child-construction lock: resolution reads auth state and may refresh a token over the network)."""
     from tools.delegate_tool import _resolve_delegation_credentials
     block = route.routing_block()
-    creds = dict(_resolve_delegation_credentials(block, parent_agent))
-    if not creds.get("api_mode"):
-        # Child construction inherits the parent's api_mode when the provider matches and none is given, which
-        # puts a same-provider route on another model's wire.
-        from hermes_cli.providers import determine_api_mode
-        creds["api_mode"] = determine_api_mode(creds["provider"], creds.get("base_url") or "", creds["model"])
-    return ChildRoute(creds, block, route.id, route.reasoning_config())
+    return ChildRoute(_resolve_delegation_credentials(block, parent_agent), block, route.id, route.reasoning_config())
 
 
 def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]:

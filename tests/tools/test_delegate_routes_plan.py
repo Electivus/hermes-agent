@@ -73,14 +73,22 @@ def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_pa
     assert child["acp_command"] is None and child["acp_args"] == []
 
 
-def test_same_provider_route_derives_its_own_wire_instead_of_the_parents(monkeypatch, tmp_path):
-    route = "openrouter/qwen/qwen3-coder"
-    harness = Harness(monkeypatch, tmp_path, {"routes": [route], "oneshot_max_children": 10})
-    harness.call([{"goal": "Review with qwen", "route": route}])
+@pytest.mark.parametrize(
+    ("config", "task"),
+    [
+        ({"routes": ["openrouter/qwen/qwen3-coder"]}, {"goal": "Review with qwen", "route": "openrouter/qwen/qwen3-coder"}),
+        ({"provider": "openrouter", "model": "qwen/qwen3-coder"}, {"goal": "Review with qwen"}),
+    ],
+    ids=["route", "delegation.provider"],
+)
+def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(monkeypatch, tmp_path, config, task):
+    # The parent runs codex_responses on openrouter; this runtime names no wire (azure-foundry resolves that way).
+    harness = Harness(monkeypatch, tmp_path, {**config, "oneshot_max_children": 10})
+    harness.call([task])
 
     (child,) = harness.built
     assert (child["provider"], child["model"]) == ("openrouter", "qwen/qwen3-coder")
-    assert child["api_mode"] == "chat_completions"  # the parent runs codex_responses on the same provider
+    assert child["api_mode"] is None  # AIAgent derives it from the provider, endpoint and model
 
 
 @pytest.mark.parametrize(
