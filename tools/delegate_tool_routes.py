@@ -123,13 +123,8 @@ def default_child_route(routing_cfg: Mapping[str, Any], parent_agent: Any) -> Ch
 
 def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
     from tools.delegate_tool import _resolve_delegation_credentials
-    from tools.delegate_tool_config import ProviderUnavailableError
     block = route.routing_block()
-    try:
-        creds = _resolve_delegation_credentials(block, parent_agent)
-    except ProviderUnavailableError as exc:
-        raise ValueError(f"provider '{route.provider}' is not configured ({exc.detail}). Run `hermes auth` or "
-                         "`hermes model` to set it up.") from exc
+    creds = _resolve_delegation_credentials(block, parent_agent, owner="delegation.routes")
     return ChildRoute(creds, block, route.id, route.reasoning_config())
 
 
