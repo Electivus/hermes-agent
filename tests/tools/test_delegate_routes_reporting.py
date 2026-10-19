@@ -175,8 +175,29 @@ def test_route_model_rejection_is_attributed_to_the_route_not_delegation_model(m
     assert f'SUBAGENT ROUTE MODEL REJECTED: route "{OPUS}" (delegation.routes)' in text
     assert "configured Subagent Model" not in text
 
-    config["routes"] = []
-    assert "REJECTED" not in format_process_notification(_completion("claude-opus-5-5", [rejected]))
-
     unrouted = _result(1, "claude-opus-5-5", status="failed", summary=None, error=REJECTED)
     assert "configured Subagent Model" in format_process_notification(_completion("claude-opus-5-5", [unrouted]))
+
+
+def test_route_rejection_notice_names_the_model_the_child_sent_whatever_the_live_catalog_says(monkeypatch):
+    route = "anthropic/claude-sonnet-4.5"  # the provider normalizes it to claude-sonnet-4-5 before sending
+    rejected = _result(0, "claude-sonnet-4-5", route=route, status="failed", summary=None,
+                       error="HTTP 400: claude-sonnet-4-5 is not a valid model ID")
+    monkeypatch.setattr(notifications, "_delegation_config", lambda: {"routes": []})  # revoked since dispatch
+
+    text = format_process_notification(_completion("claude-sonnet-4-5", [rejected]))
+    assert (f'SUBAGENT ROUTE MODEL REJECTED: route "{route}" (delegation.routes): provider "anthropic" rejected '
+            'model "claude-sonnet-4-5"') in text
+
+
+def test_delegation_model_notice_claims_the_whole_batch_only_when_every_task_was_rejected(monkeypatch):
+    monkeypatch.setattr(notifications, "_delegation_config", lambda: {"model": "claude-opus-5-5", "provider": "anthropic"})
+    rejected = _result(1, "claude-opus-5-5", status="failed", summary=None, error=REJECTED)
+
+    mixed = format_process_notification(_completion("mixed", [_result(0, "gpt-6-astra", route=ASTRA), rejected]))
+    assert "configured Subagent Model" in mixed
+    assert "Every task" not in mixed
+    assert "TASK 2 failed for this reason before doing any work." in mixed
+
+    whole = format_process_notification(_completion("claude-opus-5-5", [{**rejected, "task_index": 0}, rejected]))
+    assert "Every task in this batch failed for this reason before doing any work." in whole

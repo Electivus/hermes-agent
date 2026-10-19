@@ -119,41 +119,39 @@ def _rejects_model(model: str, results) -> bool:
     return any(model in text and any(p in text for p in patterns) for text in texts)
 
 
-def _delegation_model_not_found(results, config) -> bool:
-    """True when a result reflects a rejection of the currently-configured delegation.model."""
-    return _rejects_model(str((config or {}).get("model") or ""), results)
-
-
-def _route_model_rejected_lines(results, config) -> list[str]:
-    """One line per route (still in the live delegation.routes) whose model its provider rejected."""
-    from tools.delegate_tool_routes import load_route_catalog
-    catalog = load_route_catalog(config)
+def _route_model_rejected_lines(results) -> list[str]:
+    """One line per route whose provider rejected the model its children sent. Read from each result's own ``route``
+    and ``model`` (the provider-normalized id), so a replayed completion renders the same after config edits."""
+    from tools.delegate_tool_routes import parse_route_id
     lines = []
-    for route_id in dict.fromkeys(r["route"] for r in results if r.get("route")):
-        route = catalog.get(route_id)
-        if route is not None and _rejects_model(route.model, [r for r in results if r.get("route") == route_id]):
+    for route_id, model in dict.fromkeys((r["route"], r.get("model") or "") for r in results if r.get("route")):
+        if _rejects_model(model, [r for r in results if (r.get("route"), r.get("model") or "") == (route_id, model)]):
             lines.append(
                 f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
-                f'"{route.provider}" rejected model "{route.model}". A route has no fallback chain; fix the id in '
-                "delegation.routes or name another route.")
+                f'"{parse_route_id(route_id).provider}" rejected model "{model}". A route has no fallback chain; fix '
+                "the id in delegation.routes or name another route.")
     return lines
 
 
 def _delegation_model_not_found_notice(results) -> list[str] | None:
-    """Config-level model_not_found notice lines, or None (fail-open) — once per batch. A routed child's rejection
-    is attributed to its route; the delegation.model notice considers only unrouted children."""
+    """Model-rejection notice lines, or None (fail-open) — once per batch. A routed child's rejection is attributed
+    to its route; the delegation.model notice covers only the unrouted children it names."""
     config = _delegation_config()
     results = [r for r in results or [] if isinstance(r, dict)]
-    lines = _route_model_rejected_lines(results, config)
-    if not _delegation_model_not_found([r for r in results if not r.get("route")], config):
+    lines = _route_model_rejected_lines(results)
+    rejected = [r for r in results if not r.get("route") and _rejects_model(str(config.get("model") or ""), [r])]
+    if not rejected:
         return lines or None
     model = config.get("model") or "?"
     provider = config.get("provider") or "configured provider"
+    numbers = ", ".join(str(r.get("task_index", 0) + 1) for r in rejected)
+    scope = ("Every task in this batch" if len(rejected) == len(results)
+             else f"{'TASKS' if len(rejected) > 1 else 'TASK'} {numbers}")
     lines += [
         "⚠ SUBAGENT MODEL REJECTED: the configured Subagent Model "
         f'"{model}" was rejected by provider "{provider}" '
         "(HTTP 400: not a valid model ID).",
-        "Every task in this batch failed for this reason before doing any work.",
+        f"{scope} failed for this reason before doing any work.",
         "Check Settings → Advanced → Subagent Model (or: hermes config get delegation.model)."]
     with suppress(Exception):
         from hermes_cli.fallback_config import get_fallback_chain
@@ -253,8 +251,8 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
     if evt.get("error") and not results:
         lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]
         return "\n".join(lines)
-    # Config-level rejection notice BEFORE the per-task wall — a rejected
-    # delegation model fails every task identically and must not stay buried.
+    # Model-rejection notice BEFORE the per-task wall — a rejected model fails
+    # its tasks before any work and must not stay buried.
     lines += _notice_lines(results)
     # The record's model is written at dispatch; a child's fallback can still move it, so the results decide.
     models_differ = len(set(filter(None, (r.get("model") for r in results)))) > 1
