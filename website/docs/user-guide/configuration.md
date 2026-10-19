@@ -2996,6 +2996,8 @@ delegation:
   # base_url: "http://localhost:1234/v1"    # Direct OpenAI-compatible endpoint (takes precedence over provider)
   # api_key: "local-key"                    # API key for base_url (falls back to OPENAI_API_KEY)
   # api_mode: ""                            # Wire protocol for base_url: "chat_completions", "codex_responses", or "anthropic_messages". Empty = auto-detect from URL (e.g. /anthropic suffix → anthropic_messages). Set explicitly for non-standard endpoints the heuristic can't detect.
+  # routes:                                 # provider/model[@effort] ids a delegate_task task may name with `route` (empty = no field)
+  #   - anthropic/claude-opus-5-5@xhigh
   compression_threshold_tokens: 0          # Optional absolute cap on a subagent's compaction trigger (>= 16000); 0 = off, children use the ratio threshold
   # request_overrides:                      # Per-child request settings sent on every subagent API call (all resolution branches).
   #   extra_body:                           # Merged into the request's extra_body — e.g. OpenRouter routing hints:
@@ -3009,6 +3011,8 @@ delegation:
 ```
 
 **Subagent provider:model override:** By default, subagents inherit the parent agent's provider and model. Set `delegation.provider` and `delegation.model` to route subagents to a different provider:model pair — e.g., use a cheap/fast model for narrowly-scoped subtasks while your primary agent runs an expensive reasoning model.
+
+**Per-task routes:** `delegation.routes` lists `provider/model[@effort]` ids (for example `anthropic/claude-opus-5-5@xhigh`). A `delegate_task` task can name one with `route`, and that child runs on that provider, model and reasoning effort. The child resolves from the provider's own configuration and has no fallback chain. `base_url`, `api_key`, `api_mode`, `request_overrides` and `fallback_providers` under `delegation:` never apply to it. An empty list (the default) adds no `route` field to the tool. See [Subagent Delegation → Per-task routes](features/delegation.md#per-task-routes).
 
 **Subagent fallback chain:** Set `delegation.fallback_providers` to give workers their own chain (same entry shape as the top-level list). An explicitly pinned child (by provider, endpoint, or model) uses that chain only when it is declared; otherwise it fails loudly instead of borrowing the parent agent's route. For an unpinned child, an absent or `null` setting preserves parent-chain inheritance. Use `fallback_providers: []` under `delegation:` to disable child fallback entirely.
 

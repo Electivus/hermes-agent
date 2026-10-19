@@ -700,7 +700,7 @@ model:
   default: "your-inexpensive-model"
 ```
 
-For the occasional quality-sensitive card, pin just that task back to a stronger model with the [per-task model override](#per-task-model-override) (`--model`/`--provider` at create time, `hermes kanban set-model` later, or the dashboard's model dropdown) — no profile edits needed.
+For the occasional quality-sensitive card, pin just that task back to a stronger model with the [per-task model override](#per-task-model-override) (`--model`/`--provider` at create time, `hermes kanban set-model` later, or the dashboard's model dropdown) — no profile edits needed. For subagents inside one session, `delegate_task` offers the same per-task choice through [per-task routes](delegation.md#per-task-routes) listed in `delegation.routes`.
 
 ### Lifecycle plugin hooks
 
