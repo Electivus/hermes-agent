@@ -191,8 +191,9 @@ def plan_child_routes(
     """One ChildRoute per task, or ``([], error)`` naming every failing task.
 
     Every task's route is checked against the live catalog before any resolution, then each distinct route is
-    resolved once in first-appearance order. The default route resolves only when some task omits ``route``, so a
-    fully routed call does not depend on ``delegation.provider`` being usable.
+    resolved once in first-appearance order and every failure is reported together. The default route resolves only
+    when some task omits ``route``, so a fully routed call does not depend on ``delegation.provider`` being usable; a
+    call with no routed task keeps the default route's own error text.
     """
     catalog = load_route_catalog()
     routed = {i: task["route"] for i, task in enumerate(task_list) if "route" in task}
@@ -202,16 +203,25 @@ def plan_child_routes(
         return [], " ".join(problems) + configured
     keys = [routed.get(i) for i in range(len(task_list))]
     resolved: dict[Optional[str], ChildRoute] = {}
+    failures: dict[Optional[str], ValueError] = {}
     for key in dict.fromkeys(keys):
         try:
             resolved[key] = (default_child_route(routing_cfg, parent_agent) if key is None
                              else resolve_route(catalog.routes[key], parent_agent))
         except ValueError as exc:
-            if key is None:
-                return [], str(exc)
-            indexes = ", ".join(str(i) for i, k in enumerate(keys) if k == key)
-            return [], f"Task(s) {indexes}: route {key!r} (delegation.routes) cannot be used: {exc}"
-    return [resolved[key] for key in keys], None
+            failures[key] = exc
+    if not failures:
+        return [resolved[key] for key in keys], None
+    if not routed:
+        return [], str(failures[None])
+    return [], " ".join(_resolution_failure(key, exc, keys) for key, exc in failures.items())
+
+
+def _resolution_failure(key: Optional[str], exc: ValueError, keys: Sequence[Optional[str]]) -> str:
+    indexes = ", ".join(str(i) for i, k in enumerate(keys) if k == key)
+    if key is None:
+        return f"Task(s) {indexes} (default route): {exc}"
+    return f"Task(s) {indexes}: route {key!r} (delegation.routes) cannot be used: {exc}"
 
 
 ROUTE_DESCRIPTION = (

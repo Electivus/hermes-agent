@@ -160,6 +160,33 @@ def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_pat
     assert "not logged in" in result["error"]
 
 
+def test_every_route_that_fails_to_resolve_is_named_in_one_error(monkeypatch, tmp_path):
+    runtimes = {**RUNTIMES, "xai-oauth": RuntimeError("xai-oauth is not logged in"),
+                "openai-codex": RuntimeError("openai-codex is not logged in"),
+                "unconfigured": RuntimeError("Unknown provider 'unconfigured'")}
+    config = {"routes": [OPUS, ASTRA, GROK], "provider": "unconfigured", "oneshot_max_children": 10}
+    harness = Harness(monkeypatch, tmp_path, config, runtimes)
+    result = harness.call([
+        {"goal": "Review with grok", "route": GROK},
+        {"goal": "Review on the default route"},
+        {"goal": "Review with astra", "route": ASTRA},
+        {"goal": "Review with opus", "route": OPUS},
+        {"goal": "Review with grok again", "route": GROK},
+    ])
+
+    _assert_nothing_happened(harness, result)
+    assert harness.resolved == ["xai-oauth", "unconfigured", "openai-codex", "anthropic"]
+    error = result["error"]
+    assert f"Task(s) 0, 4: route '{GROK}'" in error and "xai-oauth is not logged in" in error
+    assert f"Task(s) 2: route '{ASTRA}'" in error and "openai-codex is not logged in" in error
+    assert "Task(s) 1" in error and "Unknown provider 'unconfigured'" in error
+    assert "Task(s) 3" not in error and OPUS not in error
+
+    default_only = Harness(monkeypatch, tmp_path, config, runtimes)
+    assert default_only.call([{"goal": "Review on the default route"}])["error"].startswith(
+        "Cannot resolve delegation provider 'unconfigured'")
+
+
 def test_fully_routed_call_does_not_resolve_the_default_route(monkeypatch, tmp_path):
     harness = Harness(monkeypatch, tmp_path, {
         "routes": [OPUS], "provider": "unconfigured-provider", "oneshot_max_children": 10,
