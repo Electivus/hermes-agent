@@ -274,6 +274,12 @@ class SubagentLifecycleService:
     def __init__(self, parent_agent_resolver: Callable[[], Any]) -> None:
         self._parent_agent_resolver = parent_agent_resolver
 
+    def routes(self) -> tuple[str, ...]:
+        """Route ids ``delegate_task`` accepts right now (``delegation.routes``, operator order, malformed entries
+        dropped). Read-only and needs no active parent: plugins read the operator's catalog, never extend it."""
+        from tools.delegate_tool_routes import load_route_catalog
+        return load_route_catalog().ids
+
     def launch(self, request: SubagentLaunchRequest | Mapping[str, Any]) -> SubagentHandle:
         parent = self._parent_agent_resolver()
         if parent is None:
