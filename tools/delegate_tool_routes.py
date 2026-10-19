@@ -7,11 +7,11 @@ import logging
 import re
 from typing import Any, Mapping, Optional, Sequence
 
-from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
+from agent.reasoning_effort import EFFORT_LADDER
+from hermes_constants import parse_reasoning_effort
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
 
-ROUTE_EFFORTS = frozenset(VALID_REASONING_EFFORTS) | {"none"}
 _PROVIDER_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
 _WARNED_ENTRIES: set[str] = set()
@@ -53,8 +53,8 @@ def parse_route_id(text: Any) -> Route:
     head, at, suffix = rest.rpartition("@")
     model, effort = rest, None
     if at and _LETTERS_RE.fullmatch(suffix):
-        if suffix not in ROUTE_EFFORTS:
-            raise RouteError(f"unknown effort {suffix!r} (one of {', '.join(sorted(ROUTE_EFFORTS))})")
+        if suffix not in EFFORT_LADDER:
+            raise RouteError(f"unknown effort {suffix!r} (one of {', '.join(EFFORT_LADDER)})")
         model, effort = head, suffix
     elif at and not suffix:
         raise RouteError("empty effort after '@'")
