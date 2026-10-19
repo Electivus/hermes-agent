@@ -95,9 +95,13 @@ boundary as a list.
 
 ```python
 def native_routes(ctx):
-    lifecycle = ctx.subagent_lifecycle
-    # Older Hermes builds have no routes() and no per-task routes.
-    return frozenset(lifecycle.routes()) if hasattr(lifecycle, "routes") else None
+    # An older Hermes has no routes() and no per-task routes. In process that raises AttributeError. Under
+    # plugins.isolation: host the host reports the missing method as a RuntimeError, which hasattr() lets through.
+    try:
+        routes = ctx.subagent_lifecycle.routes
+    except (AttributeError, RuntimeError):
+        return None
+    return frozenset(routes())
 ```
 
 A plugin that tells the model to name a route should name only an id from this

@@ -99,8 +99,8 @@ def _warn_once(key: str, message: str, *args: Any) -> None:
 def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> RouteCatalog:
     """Parse ``delegation.routes`` (``delegation_cfg`` None reads the live delegation config).
 
-    Tolerant: a non-list value is an empty catalog and a malformed entry is dropped with a warning, never advertised.
-    Pure and cheap, because it runs on every schema rebuild.
+    Tolerant: a non-list value is an empty catalog, a malformed entry is dropped with a warning and never advertised,
+    and a repeated id keeps its first entry. Cheap, because it runs on every schema rebuild.
     """
     if delegation_cfg is None:
         from tools.delegate_tool_config import _cfg

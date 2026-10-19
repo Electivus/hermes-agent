@@ -311,7 +311,7 @@ Each entry is `provider/model[@effort]`:
 - The provider ends at the first `/`, so an OpenRouter model id keeps its own slash.
 - The effort is the suffix after the last `@` when it is one of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` or `none`. `none` turns thinking off.
 - A suffix with digits stays part of the model id, for example `vertex/claude-opus-4@20250514`. Any other letters-only suffix makes the entry invalid, so a typo never becomes a model id.
-- Invalid and duplicate entries are logged once and ignored.
+- An invalid entry is logged once and ignored. A repeated id is dropped, and the first one counts.
 - The provider must already be configured (`hermes auth`, `hermes model`).
 
 When the list is not empty, each task in the tool schema gains an optional `route` field whose allowed values are exactly these ids, in this order. The model picks one of your ids or omits the field. It never supplies a provider, endpoint, key or effort of its own. An empty list (the default) adds no field and costs no schema tokens.
@@ -323,9 +323,9 @@ A routed child differs from an unrouted one in four ways:
 - Its reasoning effort is the route's effort, then `delegation.reasoning_effort`, then the parent's setting.
 - It does not inherit the parent's `agent.capabilities`, the same rule as any provider pin.
 
-`delegate_task` checks the route of every task against the current `delegation.routes`, then resolves each distinct route once, before it starts any child. If a route is not in the list, the list is empty, the value is empty or not a string, or a route's provider cannot be resolved, the call returns one error that names every failing task. Nothing starts, no transcript is created, and nothing counts against `delegation.oneshot_max_children`.
+`delegate_task` checks the route of every task against the current `delegation.routes`, then resolves each distinct route once, before it starts any child. If a route is not in the list, the list is empty or has no valid entries, the value is empty or not a string, or a route's provider is not configured, the call returns one error that names every failing task. A provider that is not configured gets the advice to run `hermes auth` or `hermes model`. Nothing starts, no transcript is created, and nothing counts against `delegation.oneshot_max_children`.
 
-Each result entry carries `model` and, for a routed child, `route`. When the children of one background unit run different models, its completion says `Model: mixed` and each task header names its child's model. The live `manifest.json` records model, provider and route for each task.
+Each result entry carries `model` and, for a routed child, `route`. In a background completion, the header of each routed task names its route. When the tasks of one unit ran different models, each header also names its child's model, and the unit's `Model:` line says `mixed` if the children started on different models. The live `manifest.json` records model, provider and route for each task, and at the top level each value that every task shares.
 
 A new route appears in the tool schema from the next session, like any other schema change. Removing a route takes effect on the next call, even in a session whose schema still lists it.
 
