@@ -80,6 +80,7 @@ class RouteCatalog:
     """The parsed ``delegation.routes``: canonical id -> Route, in operator order, first duplicate wins."""
 
     routes: Mapping[str, Route] = dataclasses.field(default_factory=dict)
+    malformed: int = 0  # configured entries dropped because they do not parse
 
     @property
     def ids(self) -> tuple[str, ...]:
@@ -106,18 +107,21 @@ def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> Ro
         delegation_cfg = _cfg()
     raw = delegation_cfg.get("routes")
     if not isinstance(raw, list):
-        if raw is not None:
-            _warn_once(f"routes:{raw!r}", "delegation.routes must be a list of provider/model[@effort] ids; got %r", raw)
-        return RouteCatalog()
+        if raw is None:
+            return RouteCatalog()
+        _warn_once(f"routes:{raw!r}", "delegation.routes must be a list of provider/model[@effort] ids; got %r", raw)
+        return RouteCatalog(malformed=1)
     routes: dict[str, Route] = {}
+    malformed = 0
     for entry in raw:
         try:
             route = parse_route_id(entry)
         except RouteError as exc:
             _warn_once(f"entry:{entry!r}", "Ignoring delegation.routes entry %r: %s", entry, exc)
+            malformed += 1
             continue
         routes.setdefault(route.id, route)
-    return RouteCatalog(routes)
+    return RouteCatalog(routes, malformed)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -170,15 +174,22 @@ def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
     """Resolve one catalog route from its provider and model alone, on the caller's thread (never inside the
     child-construction lock: resolution reads auth state and may refresh a token over the network)."""
     from tools.delegate_tool import _resolve_delegation_credentials
+    from tools.delegate_tool_config import ProviderUnavailableError
     block = route.routing_block()
-    return ChildRoute(_resolve_delegation_credentials(block, parent_agent), block, route.id, route.reasoning_config())
+    try:
+        creds = _resolve_delegation_credentials(block, parent_agent)
+    except ProviderUnavailableError as exc:
+        raise ValueError(f"provider '{route.provider}' is not configured ({exc.detail}). Run `hermes auth` or "
+                         "`hermes model` to set it up.") from exc
+    return ChildRoute(creds, block, route.id, route.reasoning_config())
 
 
 def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]:
     if not isinstance(raw, str) or not raw:
         return f"Task {index} 'route' must be a non-empty string naming one of delegation.routes."
     if not catalog.routes:
-        return (f"Task {index} names route {raw!r}, but delegation.routes is empty. Omit 'route' to use the "
+        state = "has no valid entries" if catalog.malformed else "is empty"
+        return (f"Task {index} names route {raw!r}, but delegation.routes {state}. Omit 'route' to use the "
                 "default subagent model.")
     if catalog.get(raw) is None:
         return f"Task {index} route {raw!r} is not in delegation.routes."

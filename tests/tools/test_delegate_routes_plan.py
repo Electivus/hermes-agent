@@ -119,6 +119,7 @@ def test_route_effort_beats_delegation_effort_which_beats_the_parent(
         ([OPUS], "", ["Task 0", "non-empty string"]),
         ([OPUS], 7, ["Task 0", "non-empty string"]),
         ([], OPUS, ["Task 0", "delegation.routes is empty"]),
+        (["no-slash", "anthropic/claude-opus-5-5@typo"], OPUS, ["Task 0", "delegation.routes has no valid entries"]),
     ],
 )
 def test_unusable_route_refuses_the_call_before_any_side_effect(monkeypatch, tmp_path, routes, task_route, expected):
@@ -158,6 +159,27 @@ def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_pat
     assert harness.resolved == ["anthropic", "xai-oauth"]
     assert result["error"].startswith(f"Task(s) 1, 2: route '{GROK}' (delegation.routes) cannot be used:")
     assert "not logged in" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("runtime", "cause"),
+    [
+        (RuntimeError("xai-oauth is not logged in"), "xai-oauth is not logged in"),
+        ({**RUNTIMES["xai-oauth"], "api_key": ""}, "without an API key"),
+        ({**RUNTIMES["xai-oauth"], "base_url": ""}, "without a base_url"),
+    ],
+    ids=["unresolved", "no-key", "no-endpoint"],
+)
+def test_unresolvable_route_gets_route_advice_never_the_delegation_endpoint_advice(monkeypatch, tmp_path, runtime, cause):
+    harness = Harness(monkeypatch, tmp_path, {"routes": [GROK], "oneshot_max_children": 10},
+                      {**RUNTIMES, "xai-oauth": runtime})
+    result = harness.call([{"goal": "Review with grok", "route": GROK}])
+
+    _assert_nothing_happened(harness, result)
+    error = result["error"]
+    assert error.startswith(f"Task(s) 0: route '{GROK}' (delegation.routes) cannot be used: provider 'xai-oauth'")
+    assert cause in error and "hermes auth" in error and "hermes model" in error
+    assert "delegation.base_url" not in error and "Delegation provider" not in error
 
 
 def test_every_route_that_fails_to_resolve_is_named_in_one_error(monkeypatch, tmp_path):

@@ -320,12 +320,21 @@ def _merge_request_overrides(runtime_overrides, explicit_overrides):
 _NATIVE_SDK_PROVIDERS = frozenset({"bedrock", "vertex", "google", "google-genai"})
 _EXPLICIT_API_MODES = frozenset({"chat_completions", "codex_responses", "anthropic_messages"})
 
-def _require_pinned_command(command: Optional[str], message: str) -> None:
+class ProviderUnavailableError(ValueError):
+    """A pinned provider that resolves to no usable child bundle. The message is worded for ``delegation.provider``;
+    ``detail`` is the bare cause, so another config owner (``delegation.routes``) can word its own advice."""
+
+    def __init__(self, message: str, *, detail: str) -> None:
+        super().__init__(message)
+        self.detail = detail
+
+
+def _require_pinned_command(command: Optional[str], error: ValueError) -> None:
     """A pinned ACP transport command must exist on PATH — refuse loudly rather
     than let the child silently fall back to another transport."""
     import shutil as _shutil
     if command and not _shutil.which(command):
-        raise ValueError(message)
+        raise error
 
 def _credential_bundle(model, provider, base_url, api_key, api_mode, request_overrides, **extra) -> dict:
     """The child credential dict every branch of ``_resolve_delegation_credentials`` returns."""
@@ -383,36 +392,40 @@ def _runtime_provider_credentials(v: dict, explicit_request_overrides) -> dict:
         from hermes_cli.runtime_provider import resolve_runtime_provider
         runtime = resolve_runtime_provider(requested=configured_provider, target_model=v["model"])
     except Exception as exc:
-        raise ValueError(
+        raise ProviderUnavailableError(
             f"Cannot resolve delegation provider '{configured_provider}': {exc}. "
             f"Check that the provider is configured (API key set, valid provider name), "
             f"or set delegation.base_url/delegation.api_key for a direct endpoint. "
-            f"Available providers: openrouter, nous, zai, kimi-coding, minimax."
+            f"Available providers: openrouter, nous, zai, kimi-coding, minimax.",
+            detail=str(exc),
         ) from exc
 
     api_key = runtime.get("api_key", "")
     if not api_key:
-        raise ValueError(
+        raise ProviderUnavailableError(
             f"Delegation provider '{configured_provider}' resolved but has no API key. "
-            f"Set the appropriate environment variable or run 'hermes auth'."
+            f"Set the appropriate environment variable or run 'hermes auth'.",
+            detail="it resolved without an API key",
         )
     # A pinned ACP transport command must exist — refuse the spawn loudly rather than letting the child
     # silently fall back to another transport (#80450).
     pinned_command = runtime.get("command")
-    _require_pinned_command(
-        pinned_command, f"Delegation provider '{configured_provider}' is pinned to the "
+    _require_pinned_command(pinned_command, ProviderUnavailableError(
+        f"Delegation provider '{configured_provider}' is pinned to the "
         f"'{pinned_command}' command, which was not found on PATH. "
         f"Install it or choose a different delegation provider.",
-    )
+        detail=f"its '{pinned_command}' command was not found on PATH",
+    ))
     # A provider override is assembled into the child as one bundle (see _resolve_child_runtime), so it must
     # carry its own endpoint. ACP transports are addressed by command and native-SDK providers by their SDK,
     # so neither needs a URL; anything else without one would otherwise be built with no endpoint at all.
     if (not runtime.get("base_url") and not pinned_command
             and configured_provider.strip().lower() not in _NATIVE_SDK_PROVIDERS):
-        raise ValueError(
+        raise ProviderUnavailableError(
             f"Delegation provider '{configured_provider}' resolved without a base_url. "
             f"Refusing to build a subagent with an incomplete credential bundle — check the provider's "
-            f"configuration / auth, or set delegation.base_url for a direct endpoint."
+            f"configuration / auth, or set delegation.base_url for a direct endpoint.",
+            detail="it resolved without a base_url",
         )
     return _credential_bundle(
         v["model"] or runtime.get("model") or None,
@@ -548,10 +561,10 @@ def _resolve_child_runtime(
         effective_api_mode = getattr(parent_agent, "api_mode", None)
     # A pinned transport that cannot run must fail the spawn loudly, never fall
     # back silently (delegate_task pre-validates; this covers direct callers).
-    _require_pinned_command(
-        override_acp_command, f"Pinned delegation command '{override_acp_command}' was not "
+    _require_pinned_command(override_acp_command, ValueError(
+        f"Pinned delegation command '{override_acp_command}' was not "
         f"found on PATH. Install it or remove delegation.command from config.yaml.",
-    )
+    ))
     effective_acp_command = override_acp_command or getattr(parent_agent, "acp_command", None)
     effective_acp_args = list(
         override_acp_args if override_acp_args is not None else (getattr(parent_agent, "acp_args", []) or [])
