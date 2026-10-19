@@ -118,6 +118,25 @@ def test_old_durable_results_are_redacted_on_read_replay_and_failure_roster():
     assert SECRET not in json.dumps(failures)
 
 
+def test_route_id_survives_every_redacted_copy(monkeypatch):
+    from agent.redact import redact_for_egress
+    from tools.delegate_tool_routes import parse_route_id
+
+    route = "custom:lab/" + "hf_" + "syntheticroutemodelid" * 2
+    assert parse_route_id(route).id == route
+    assert redact_for_egress(route) != route
+    record, target = {**_record(), "is_batch": True}, queue.Queue()
+    monkeypatch.setattr(process_registry, "completion_queue", target)
+    entry = {"task_index": 0, "status": "completed", "summary": SECRET, "model": "m", "route": route}
+
+    ad._push_completion_event(record, {"results": [entry]}, "completed")
+
+    assert target.get_nowait()["results"][0]["route"] == route
+    with ad._transaction() as conn:
+        rows = conn.execute("SELECT event_json,result_json FROM async_delegations").fetchone()
+    assert [json.loads(row)["results"][0]["route"] for row in rows] == [route, route]
+    assert SECRET not in "".join(rows)
+
 def test_redacted_schema_verdict_describes_delivered_summary_without_rerunning_child():
     child = _StubChild([json.dumps({"value": SECRET})])
     child._delegate_output_schema = {

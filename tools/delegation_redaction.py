@@ -48,7 +48,7 @@ _PARENT_EVENT_FIELDS = frozenset(
     }
 )
 _RESULT_METADATA = frozenset(
-    {"task_index", "model", "group", "_child_role", "status", "exit_reason"}
+    {"task_index", "model", "route", "group", "_child_role", "status", "exit_reason"}
 )
 
 

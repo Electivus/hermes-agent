@@ -291,7 +291,43 @@ delegation:
 
 Resolution order: `delegation.base_url` (direct endpoint) takes precedence, then `delegation.provider` (full credential bundle resolved via the runtime provider system), and when neither is set children inherit the parent's provider and credentials; `delegation.model` applies in all cases, and when it is empty children inherit the parent's model. Setting `delegation.provider` alongside `delegation.base_url` keeps the explicit endpoint but carries that provider's request overrides and max output tokens into the child. An explicit `delegation.request_overrides` dict is honored on every branch and merges over those runtime-derived values (see [Configuration](#configuration) below).
 
-Note that the pin is global: `delegate_task` has no per-task model parameter, so every child in a batch runs on the configured delegation model. For quality-sensitive subtasks that need a stronger model, either leave `delegation.model` unset for that session or hand the task to the [kanban board](kanban.md#per-task-model-override), which does support a per-task model override.
+Note that the pin is global: every child of a call runs on the configured delegation model unless its task names a route. To run some tasks of one call on other models, list those routes as described next. The [kanban board](kanban.md#per-task-model-override) also supports a per-task model override.
+
+### Per-task routes
+
+List the routes subagents may run on. A task in a `delegate_task` call can then name one with `route`, and that child runs on the route's provider, model and reasoning effort. Tasks without `route` keep the default subagent model described above.
+
+```yaml
+# ~/.hermes/config.yaml
+delegation:
+  routes:
+    - anthropic/claude-opus-5-5@xhigh
+    - openai-codex/gpt-6-astra@high
+    - openrouter/qwen/qwen3-coder
+```
+
+Each entry is `provider/model[@effort]`:
+
+- The provider ends at the first `/`, so an OpenRouter model id keeps its own slash.
+- The effort is the suffix after the last `@` when it is one of `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` or `none`. `none` turns thinking off.
+- A suffix with digits stays part of the model id, for example `vertex/claude-opus-4@20250514`. Any other letters-only suffix makes the entry invalid, so a typo never becomes a model id.
+- An invalid entry is logged once and ignored. A repeated id is dropped, and the first one counts.
+- The provider must already be configured (`hermes auth`, `hermes model`).
+
+When the list is not empty, each task in the tool schema gains an optional `route` field whose allowed values are exactly these ids, in this order. The model picks one of your ids or omits the field. It never supplies a provider, endpoint, key or effort of its own. An empty list (the default) adds no field and costs no schema tokens.
+
+A routed child differs from an unrouted one in four ways:
+
+- Its endpoint, key, transport and request settings come from that provider's own configuration. `delegation.base_url`, `api_key`, `api_mode`, `request_overrides` and `fallback_providers` never apply to it. Unrouted tasks in the same call still use them.
+- It has no fallback chain. If the provider rejects the model, that task fails with `status: "failed"`, and the completion notice names the route instead of `delegation.model`.
+- Its reasoning effort is the route's effort, then `delegation.reasoning_effort`, then the parent's setting.
+- It does not inherit the parent's `agent.capabilities`, the same rule as any provider pin.
+
+`delegate_task` checks the route of every task against the current `delegation.routes`, then resolves each distinct route once, before it starts any child. If a route is not in the list, the list is empty or has no valid entries, the value is empty or not a string, or a route's provider is not configured, the call returns one error that names every failing task. A provider that is not configured gets the advice to run `hermes auth` or `hermes model`. Nothing starts, no transcript is created, and nothing counts against `delegation.oneshot_max_children`.
+
+Each result entry carries `model` and, for a routed child, `route`. In a background completion, the header of each routed task names its route. When the tasks of one unit ran different models, each header also names its child's model, and the unit's `Model:` line says `mixed` if the children started on different models. The live `manifest.json` records model, provider and route for each task, and at the top level each value that every task shares.
+
+A new route appears in the tool schema from the next session, like any other schema change. Removing a route takes effect on the next call, even in a session whose schema still lists it.
 
 ## The `/review` Command
 
@@ -605,7 +641,8 @@ For **durable execution** that must survive session closure or process restart, 
 - Leaf subagents **cannot** call: `delegate_task`, `clarify`, `memory`, `send_message`, `cronjob`. Orchestrator subagents retain `delegate_task` but keep the other blocks. Both roles retain `execute_code` (programmatic tool calling) so children can batch mechanical work instead of burning reasoning iterations.
 - **Cancellation follows ownership** — `/stop` or closing/resetting the owning session ends its background children and the synchronous descendants beneath them; each returns an interrupted completion carrying its partial output
 - Only the final summary enters the parent's context, keeping token usage efficient
-- Subagents inherit the parent's **API key, provider configuration, and credential pool** (enabling key rotation on rate limits)
+- Subagents inherit the parent's **API key, provider configuration, and credential pool** (enabling key rotation on rate limits), unless `delegation.provider`, `delegation.base_url` or a task's `route` pins another
+- **Routes are operator-owned.** A task's `route` must be an id from `delegation.routes`, so the model chooses among your routes and never names a provider, endpoint or key
 
 ## Worktree Isolation
 
@@ -671,6 +708,8 @@ delegation:
   model: "google/gemini-3-flash-preview"             # Optional provider/model override
   provider: "openrouter"                             # Optional built-in provider
   api_mode: anthropic_messages                       # optional; auto-detected from base_url for anthropic_messages endpoints
+  # routes:                                          # provider/model[@effort] ids a task may name with `route` (see Per-task routes)
+  #   - anthropic/claude-opus-5-5@xhigh
 
 # Or use a direct custom endpoint instead of provider:
 delegation:

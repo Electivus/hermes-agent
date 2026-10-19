@@ -56,6 +56,9 @@ from tools.delegate_tool_toolsets import (
 from tools.delegate_tool_results import (
     _apply_summary_budget, _build_child_preserving_parent_tools, _run_child_lifecycle, _summarize_tool_arguments,
 )
+from tools.delegate_tool_routes import (
+    DESCRIPTION_TAIL_WITH_ROUTES, ChildRoute, load_route_catalog, plan_child_routes, route_schema_property,
+)
 
 _ROLES = frozenset({"leaf", "orchestrator"})
 
@@ -219,6 +222,8 @@ def _build_child_agent(
     # callers such as /review pass auxiliary.review here so fallback policy is
     # not accidentally read from the general delegation block.
     routing_cfg: Optional[dict[str, Any]] = None,
+    # A route's own reasoning (its @effort); None keeps delegation.reasoning_effort > parent.
+    override_reasoning_config: Optional[dict[str, Any]] = None,
     # Legacy; accepted for wire compat but ignored (capability is depth-derived).
     role: str = "leaf",
 ):
@@ -264,7 +269,7 @@ def _build_child_agent(
         override_base_url=override_base_url, override_api_key=override_api_key, override_api_mode=override_api_mode,
         override_acp_command=override_acp_command,
         override_acp_args=override_acp_args,
-        routing_cfg=routing_cfg,
+        routing_cfg=routing_cfg, override_reasoning_config=override_reasoning_config,
     )
     if override_request_overrides is not None:
         # honored whenever set, incl. the inherit branch where
@@ -405,28 +410,15 @@ def _run_single_child(
         run.cleanup(heartbeat=heartbeat, child_pool=child_pool, leased_cred_id=leased_cred_id, close_deferred=_child_close_deferred)
 
 
-def _credential_overrides(creds: dict[str, Any], routing_cfg: dict[str, Any]) -> dict[str, Any]:
-    """``_build_child_agent`` override kwargs for a resolved credential bundle (delegate_task and the lifecycle API)."""
-    return {
-        "override_provider": creds["provider"], "override_base_url": creds["base_url"],
-        "override_api_key": creds["api_key"], "override_api_mode": creds["api_mode"],
-        "override_request_overrides": creds.get("request_overrides"),
-        "override_acp_command": creds.get("command"),
-        "override_acp_args": creds.get("args"),
-        "routing_cfg": routing_cfg,
-    }
-
-
 def _build_children(
-    task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], creds: dict[str, Any], *,
-    top_role: str, max_iterations: int, parent_agent, routing_cfg: dict[str, Any],
+    task_list: list[dict[str, Any]], task_schemas: list[Optional[dict[str, Any]]], routes: list[ChildRoute], *,
+    top_role: str, max_iterations: int, parent_agent,
     live_deleg_id: Optional[str], live_writers: list, task_images: Optional[list[Optional[list[str]]]] = None,
 ) -> tuple[list[tuple], Optional[str]]:
     """Build every child on the main thread (construction is not thread-safe);
     ``(children, None)`` or ``([], error)`` on an explicit-pin preflight failure."""
     from tools.delegation_live_log import wrap_progress_callback
     from tools.delegation_output_schema import append_output_contract
-    overrides = _credential_overrides(creds, routing_cfg)
     children = []
     for i, t in enumerate(task_list):
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
@@ -437,11 +429,12 @@ def _build_children(
             child = _build_child_preserving_parent_tools(
                 task_index=i, goal=t["goal"], context=_child_context,
                 toolsets=None,  # always inherit the parent's toolsets
-                model=creds["model"], max_iterations=max_iterations, task_count=len(task_list),
-                parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **overrides,
+                max_iterations=max_iterations, task_count=len(task_list),
+                parent_agent=parent_agent, role=_normalize_role(t.get("role") or top_role), **routes[i].build_kwargs(),
             )
         except ValueError as exc:
             return [], str(exc)
+        child._delegate_route = routes[i].route_id
         if _task_schema is not None:
             with _quiet("Could not attach output schema to child %d", i):
                 child._delegate_output_schema = _task_schema
@@ -539,21 +532,18 @@ def delegate_task(
     # a per-call routing owner shaped like the delegation config section. Keep
     # the route and its fallback policy together through child construction.
     routing_cfg = credentials_cfg if credentials_cfg is not None else cfg
-    try:
-        creds = _resolve_delegation_credentials(routing_cfg, parent_agent)
-    except ValueError as exc:
-        # Explicit-pin preflight failures (e.g. pinned delegation.command missing from PATH) refuse the
-        # spawn loudly (#80450).
-        return tool_error(str(exc))
     max_children = _get_max_concurrent_children()
     task_list, err = _normalize_task_list(goal, context, tasks, output_schema, top_role, max_children)
     if not err:
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if not err:
         task_images, err = _coerce_task_images(task_list, images)
-    if err:
-        return tool_error(err)
-    err = _oneshot_spawn_budget(parent_agent, len(task_list))
+    if not err:
+        routes, err = plan_child_routes(
+            task_list, catalog=load_route_catalog(cfg), routing_cfg=routing_cfg, parent_agent=parent_agent,
+        )
+    if not err:
+        err = _oneshot_spawn_budget(parent_agent, len(task_list))
     if err:
         return tool_error(err)
 
@@ -574,20 +564,19 @@ def delegate_task(
 
     from tools.delegation_live_log import create_live_transcripts
     live_deleg_id, live_writers, live_paths = create_live_transcripts(
-        task_list, context, model=creds.get("model"), provider=creds.get("provider"),
-        home=_live_home,
+        task_list, context, identities=[route.identity(parent_agent) for route in routes], home=_live_home,
     )
     _announce_batch(parent_agent, len(task_list), live_deleg_id)
     origin = _capture_origin()
 
     children, err = _build_children(
-        task_list, task_schemas, creds, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
-        routing_cfg=routing_cfg, live_deleg_id=live_deleg_id, live_writers=live_writers, task_images=task_images,
+        task_list, task_schemas, routes, top_role=top_role, max_iterations=default_max_iter, parent_agent=parent_agent,
+        live_deleg_id=live_deleg_id, live_writers=live_writers, task_images=task_images,
     )
     if err:
         return tool_error(err)
     batch = _Batch(
-        task_list, children, parent_agent, creds, context, top_role, max_children,
+        task_list, children, parent_agent, context, top_role, max_children,
         live_deleg_id, live_writers, live_paths, *origin, overall_start,
         live_home=_live_home,
     )
@@ -596,7 +585,7 @@ def delegate_task(
 
 # ── OpenAI function-calling schema ──────────────────────────────────────────
 
-def _build_top_level_description(*, independent_completions=None) -> str:
+def _build_top_level_description(*, independent_completions=None, routes_enabled: bool = False) -> str:
     """delegate_task description: ONLY guidance stated nowhere else in the schema
     (limits live in the 'tasks' parameter description, rebuilt per get_definitions())."""
     try:
@@ -621,7 +610,8 @@ def _build_top_level_description(*, independent_completions=None) -> str:
         "each ungrouped task / `group` returns on its own"
         if independent_completions else "one message per call"
     )
-    return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + _DESCRIPTION_TAIL
+    tail = DESCRIPTION_TAIL_WITH_ROUTES if routes_enabled else _DESCRIPTION_TAIL
+    return _DESCRIPTION_HEAD.format(delivery=delivery) + restrictions_rule + tail
 
 _DESCRIPTION_HEAD = (
     "Spawn subagents in isolated contexts; each gets its own conversation, terminal session, and toolset, and only its "
@@ -679,14 +669,19 @@ def _build_dynamic_schema_overrides() -> dict:
     overrides_params["properties"] = {k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()}
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
 
-    if not independent_completions:
-        tasks = overrides_params["properties"]["tasks"]
-        tasks["items"] = {**tasks["items"], "properties": {
-            k: v for k, v in tasks["items"]["properties"].items() if k != "group"
-        }}
+    route_property = route_schema_property(load_route_catalog(_load_config()))
+    tasks = overrides_params["properties"]["tasks"]
+    item_properties = {
+        k: v for k, v in tasks["items"]["properties"].items() if independent_completions or k != "group"
+    }
+    if route_property is not None:
+        item_properties["route"] = route_property
+    tasks["items"] = {**tasks["items"], "properties": item_properties}
 
     return {
-        "description": _build_top_level_description(independent_completions=independent_completions),
+        "description": _build_top_level_description(
+            independent_completions=independent_completions, routes_enabled=route_property is not None,
+        ),
         "parameters": overrides_params,
     }
 

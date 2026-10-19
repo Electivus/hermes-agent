@@ -37,7 +37,7 @@ class Sink(GatewayNotificationsMixin):
 def batch_run(did, gates):
     tasks=[{'goal':f'worker task {i}','group':'g'} for i in range(3)]  # grouped: one shared final, so the early notice matters
     children=[(i,t,SimpleNamespace()) for i,t in enumerate(tasks)]
-    b=dd._Batch(tasks,children,SimpleNamespace(quiet_mode=True),{'model':'offline'},None,'leaf',3,did,[],[], '', '',None,None,time.monotonic())
+    b=dd._Batch(tasks,children,SimpleNamespace(quiet_mode=True),None,'leaf',3,did,[],[], '', '',None,None,False,time.monotonic())
     # Since the per-group split on main, a detached unit carries its registry id; the notice keys on it.
     if hasattr(b,'unit_id'): b.unit_id=did; b.group='g'
     def child(i,t,c):

@@ -167,7 +167,43 @@ delegation:
 
 解析顺序：`delegation.base_url`（直连端点）优先，其次是 `delegation.provider`（通过运行时提供商系统解析完整凭证包）；两者都未设置时，子智能体继承父智能体的提供商和凭证。`delegation.model` 在所有情况下生效，为空时子智能体继承父智能体的模型。
 
-注意此固定是全局的：`delegate_task` 没有按任务指定模型的参数，批处理中的每个子智能体都运行配置的委派模型。对于需要更强模型的质量敏感型子任务，可以在该会话中不设置 `delegation.model`，或者将任务交给[看板](kanban.md)——看板支持按任务覆盖模型。
+注意此固定是全局的：除非任务指定了 `route`，同一次调用中的每个子智能体都运行配置的委派模型。要让同一次调用中的部分任务运行其他模型，请按下一节列出这些路由。[看板](kanban.md)同样支持按任务覆盖模型。
+
+### 按任务指定路由
+
+先列出子智能体可以使用的路由。之后，`delegate_task` 调用中的任务可以用 `route` 指定其中一个，该子智能体就会在该路由的提供商、模型和推理强度上运行。没有 `route` 的任务继续使用上文的默认子智能体模型。
+
+```yaml
+# ~/.hermes/config.yaml
+delegation:
+  routes:
+    - anthropic/claude-opus-5-5@xhigh
+    - openai-codex/gpt-6-astra@high
+    - openrouter/qwen/qwen3-coder
+```
+
+每个条目的格式为 `provider/model[@effort]`：
+
+- 提供商到第一个 `/` 为止，因此 OpenRouter 的模型 id 保留自己的斜杠。
+- 最后一个 `@` 之后的后缀是 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra` 或 `none` 之一时，它就是推理强度。`none` 关闭思考。
+- 含数字的后缀仍属于模型 id，例如 `vertex/claude-opus-4@20250514`。其他纯字母后缀会使条目无效，因此拼写错误不会变成模型 id。
+- 无效条目只记录一次日志，然后被忽略。重复的 id 会被丢弃，以第一个为准。
+- 提供商必须已经配置（`hermes auth`、`hermes model`）。
+
+列表不为空时，工具 schema 中的每个任务会增加一个可选的 `route` 字段，其取值恰好是这些 id，并保持此顺序。模型只能选择你列出的 id 或省略该字段，从不自行提供提供商、端点、密钥或推理强度。空列表（默认值）不会增加字段，也不占用 schema token。
+
+与未指定路由的子智能体相比，指定路由的子智能体有四点不同：
+
+- 其端点、密钥、传输方式和请求设置来自该提供商自身的配置。`delegation.base_url`、`api_key`、`api_mode`、`request_overrides` 和 `fallback_providers` 不会作用于它。同一次调用中未指定路由的任务仍然使用这些设置。
+- 它没有回退链。如果提供商拒绝该模型，该任务以 `status: "failed"` 失败，完成通知会指出该路由，而不是 `delegation.model`。
+- 推理强度依次取路由的强度、`delegation.reasoning_effort`、父智能体的设置。
+- 它不继承父智能体的 `agent.capabilities`，与任何提供商固定的规则相同。
+
+`delegate_task` 会先用当前的 `delegation.routes` 检查每个任务的路由，再将每个不同的路由解析一次，然后才启动任何子智能体。如果某个路由不在列表中、列表为空或没有有效条目、取值为空或不是字符串，或者某个路由的提供商尚未配置，调用会返回一条错误，列出所有失败的任务。对于尚未配置的提供商，错误会建议运行 `hermes auth` 或 `hermes model`。此时不会启动任何子智能体，不会创建记录文件，也不会计入 `delegation.oneshot_max_children`。
+
+每个结果条目都包含 `model`，指定路由的子智能体还包含 `route`。在后台完成通知中，每个指定路由的任务标题会写出其路由。当同一个单元的任务运行了不同模型时，每个任务标题还会写出该子智能体的模型；如果子智能体启动时的模型就不同，该单元的 `Model:` 行显示 `mixed`。实时 `manifest.json` 会为每个任务记录模型、提供商和路由，并在顶层记录所有任务共有的值。
+
+新增的路由从下一个会话起出现在工具 schema 中，与其他 schema 变更相同。删除路由从下一次调用起生效，即使当前会话的 schema 仍然列出它。
 
 ## `/review` 命令
 
@@ -311,7 +347,8 @@ delegate_task(
 - 叶子子智能体**不能**调用：`delegate_task`、`clarify`、`memory`、`send_message`、`execute_code`。编排者子智能体保留 `delegate_task`，但仍不能使用其他四个。
 - **取消遵循所有权**——`/stop` 或关闭/重置所属会话会取消其后台子智能体；编排者下的同步后代会跟随父智能体的中断状态
 - 只有最终摘要进入父智能体的上下文，保持 token 使用高效
-- 子智能体继承父智能体的 **API 密钥、provider 配置和凭据池**（支持在速率限制时轮换密钥）
+- 子智能体继承父智能体的 **API 密钥、provider 配置和凭据池**（支持在速率限制时轮换密钥），除非 `delegation.provider`、`delegation.base_url` 或任务的 `route` 固定了其他提供商
+- **路由归操作者所有。** 任务的 `route` 必须是 `delegation.routes` 中的 id，因此模型只能在你的路由中选择，从不指定提供商、端点或密钥
 
 ## delegate_task 与 execute_code 对比
 
@@ -339,6 +376,8 @@ delegation:
   model: "google/gemini-3-flash-preview"             # Optional provider/model override
   provider: "openrouter"                             # Optional built-in provider
   api_mode: anthropic_messages                       # optional; auto-detected from base_url for anthropic_messages endpoints
+  # routes:                                          # provider/model[@effort] ids a task may name with `route` (see 按任务指定路由)
+  #   - anthropic/claude-opus-5-5@xhigh
 
 # Or use a direct custom endpoint instead of provider:
 delegation:

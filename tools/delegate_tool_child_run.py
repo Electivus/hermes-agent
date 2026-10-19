@@ -33,11 +33,18 @@ def _num(value: Any, default: int = 0) -> int:
 def _str_or_none(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
+def _route_fields(child: Any) -> dict[str, Any]:
+    fields = {"model": _str_or_none(getattr(child, "model", None))}
+    route = _str_or_none(getattr(child, "_delegate_route", None))
+    if route:
+        fields["route"] = route
+    return fields
+
 def _fabricated_entry(idx: int, status: str, error: str, child: Any, duration: float = 0) -> dict[str, Any]:
     """Result entry for a child that raised, never finished, or was abandoned."""
     return {
         "task_index": idx, "status": status, "summary": None, "error": error, "api_calls": 0,
-        "duration_seconds": duration, "_child_role": getattr(child, "_delegate_role", None),
+        "duration_seconds": duration, **_route_fields(child), "_child_role": getattr(child, "_delegate_role", None),
     }
 
 def _append_missed_steer(entry: dict[str, Any], late_steer: Optional[str]) -> None:
@@ -595,7 +602,7 @@ def _build_result_entry(
         "summary": summary,
         "api_calls": result.get("api_calls", 0),
         "duration_seconds": duration,
-        "model": _str_or_none(getattr(child, "model", None)),
+        **_route_fields(child),
         "exit_reason": exit_reason,
         # A budget-exhausted child still returns a summary (status stays
         # "completed"), so the parent needs this explicit flag.
@@ -959,6 +966,7 @@ class _ChildRun:
             # How long the child had been silent when the wait ended: distinguishes a slow provider from a runaway
             # without transcript forensics (#116001).
             "last_event_age": _child_last_event_age(child) if is_timeout else None,
+            **_route_fields(child),
             "_child_role": getattr(child, "_delegate_role", None),
             "diagnostic_path": diagnostic_path,
         }

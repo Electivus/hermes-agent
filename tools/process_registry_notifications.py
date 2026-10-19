@@ -108,30 +108,45 @@ def _delegation_config() -> dict:
         return {}
 
 
-def _delegation_model_not_found(results, config) -> bool:
-    """True when a result reflects a config-level model_not_found rejection: needs a
-    model-not-found phrase AND the currently-configured model name in the same text,
-    so a stale task failing on a removed model is not mis-attributed to the config."""
-    model = str((config or {}).get("model") or "").lower()
+def _rejects_model(model: str, results) -> bool:
+    model = model.lower()
     if not model:
         return False
     patterns = _model_not_found_patterns()
-    texts = (" ".join(str(x) for x in (r.get("error"), r.get("summary")) if x).lower() for r in results or [])
+    texts = (" ".join(str(x) for x in (r.get("error"), r.get("summary")) if x).lower() for r in results)
     return any(model in text and any(p in text for p in patterns) for text in texts)
 
 
+def _route_model_rejected_lines(results) -> list[str]:
+    from tools.delegate_tool_routes import parse_route_id
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for r in results:
+        if r.get("route"):
+            groups.setdefault((r["route"], r.get("model") or ""), []).append(r)
+    return [
+        f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
+        f'"{parse_route_id(route_id).provider}" rejected model "{model}". A route has no fallback chain; fix '
+        "the id in delegation.routes or name another route."
+        for (route_id, model), group in groups.items() if _rejects_model(model, group)]
+
+
 def _delegation_model_not_found_notice(results) -> list[str] | None:
-    """Config-level model_not_found notice lines, or None (fail-open) — once per batch."""
     config = _delegation_config()
-    if not _delegation_model_not_found(results, config):
-        return None
+    lines = _route_model_rejected_lines(results)
+    configured_model = str(config.get("model") or "")
+    rejected = [r for r in results if not r.get("route") and _rejects_model(configured_model, [r])]
+    if not rejected:
+        return lines or None
     model = config.get("model") or "?"
     provider = config.get("provider") or "configured provider"
-    lines = [
+    numbers = ", ".join(str(r.get("task_index", 0) + 1) for r in rejected)
+    scope = ("Every task in this batch" if len(rejected) == len(results)
+             else f"{'TASKS' if len(rejected) > 1 else 'TASK'} {numbers}")
+    lines += [
         "⚠ SUBAGENT MODEL REJECTED: the configured Subagent Model "
         f'"{model}" was rejected by provider "{provider}" '
         "(HTTP 400: not a valid model ID).",
-        "Every task in this batch failed for this reason before doing any work.",
+        f"{scope} failed for this reason before doing any work.",
         "Check Settings → Advanced → Subagent Model (or: hermes config get delegation.model)."]
     with suppress(Exception):
         from hermes_cli.fallback_config import get_fallback_chain
@@ -185,7 +200,9 @@ def _format_task_failure_notice(evt: dict, deleg_id: str) -> str:
         "The batch's consolidated results will still arrive when the last sibling finishes; this is an early "
         "warning so you can re-dispatch or investigate now instead of then.",
         f"Task: {goal}" if goal else "",
-        f"Status: {r.get('status', '?')}   Duration: {r.get('duration_seconds', '?')}s" + (f"\nError: {err}" if err else ""),
+        f"Status: {r.get('status', '?')}   Duration: {r.get('duration_seconds', '?')}s"
+        + (f"   Model: {r['model']}" if r.get("model") else "") + (f"   Route: {r['route']}" if r.get("route") else "")
+        + (f"\nError: {err}" if err else ""),
     ]
     if r.get("live_transcript"):
         lines.append(f"Live transcript: {r['live_transcript']}")
@@ -211,6 +228,7 @@ def _recovery_lines(evt: dict) -> list[str]:
 
 def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> str:
     """Consolidated block for a delegate_task fan-out that finished as one unit."""
+    from tools.delegation_live_log import shared_value
     results, goals = evt.get("results") or [], evt.get("goals") or []
     # ``goals`` is the whole delegate_task call (task_index indexes it); ``results`` is this unit's subset.
     n, n_unit = len(goals) or len(results), len(results) or len(goals)
@@ -229,15 +247,16 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
     if evt.get("error") and not results:
         lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]
         return "\n".join(lines)
-    # Config-level rejection notice BEFORE the per-task wall — a rejected
-    # delegation model fails every task identically and must not stay buried.
     lines += _notice_lines(results)
+    models_differ = shared_value(r.get("model") for r in results) is None
     for r in sorted(results, key=lambda x: x.get("task_index", 0)):
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
         r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
         icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
+                  + (f", model={r['model']}" if models_differ and r.get("model") else "")
+                  + (f", route={r['route']}" if r.get("route") else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))

@@ -1345,6 +1345,7 @@ DEFAULT_CONFIG = {
     "delegation": {
         "model": "",  # e.g. "google/gemini-3-flash-preview" (empty = inherit parent)
         "provider": "",  # e.g. "openrouter" (empty = inherit parent provider + credentials)
+        "routes": [],  # delegate_task `route` ids "provider/model[@effort]" ([] = no field); see cli-config.yaml.example
         # Fallback chain for delegated children (same entry format as the top-level list).
         # For an unpinned child, null = inherit the parent chain; [] = disable fallback.
         # A child pinned by provider, endpoint, or model gets no fallback unless this
@@ -1352,9 +1353,8 @@ DEFAULT_CONFIG = {
         "fallback_providers": None,
         "base_url": "",  # direct OpenAI-compatible endpoint for subagents
         "api_key": "",  # key for delegation.base_url (falls back to OPENAI_API_KEY)
-        # Wire protocol for delegation.base_url: "chat_completions" | "codex_responses" |
-        # "anthropic_messages". Empty = auto-detect from URL (e.g. /anthropic suffix); set
-        # explicitly for non-standard endpoints.
+        # Wire protocol for delegation.base_url: "chat_completions" | "codex_responses" | "anthropic_messages".
+        # Empty = auto-detect from URL (e.g. /anthropic suffix); set explicitly for non-standard endpoints.
         "api_mode": "",
         # Per-child request settings on every delegation call (all resolution branches). Top-level
         # keys = API kwargs (e.g. service_tier); "extra_body" sub-dict merges into extra_body, e.g.

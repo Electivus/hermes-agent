@@ -1,0 +1,188 @@
+"""Per-task routes for delegate_task: the delegation.routes catalog, route-id parsing and per-task resolution."""
+
+from __future__ import annotations
+
+import dataclasses
+import re
+from typing import Any, Mapping, Optional, Sequence
+
+from agent.reasoning_effort import EFFORT_LADDER
+from hermes_constants import parse_reasoning_effort
+from tools.delegate_tool_config import _warn_once
+
+_PROVIDER_RE = re.compile(r"[A-Za-z0-9_.:-]+")
+_LETTERS_RE = re.compile(r"[A-Za-z]+")
+
+
+class RouteError(ValueError):
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Route:
+    provider: str
+    model: str
+    effort: Optional[str] = None
+
+    @property
+    def id(self) -> str:
+        return f"{self.provider}/{self.model}" + (f"@{self.effort}" if self.effort else "")
+
+    def routing_block(self) -> dict[str, str]:
+        return {"provider": self.provider, "model": self.model}
+
+    def reasoning_config(self) -> Optional[dict[str, Any]]:
+        return parse_reasoning_effort(self.effort) if self.effort else None
+
+
+def parse_route_id(text: Any) -> Route:
+    """Parse ``provider/model[@effort]``; ``Route.id`` round-trips to ``text``.
+
+    The provider ends at the first ``/`` (models may contain ``/``). A suffix after the last ``@`` is the effort only
+    when it is letters-only; a letters-only suffix outside the effort vocabulary is an error, so a typo never becomes
+    part of a model id, while a suffix with digits (``claude-opus-4@20250514``) stays in the model.
+    """
+    if not isinstance(text, str) or not text or any(ch.isspace() for ch in text):
+        raise RouteError("expected a provider/model[@effort] string without whitespace")
+    provider, slash, rest = text.partition("/")
+    if not slash or not _PROVIDER_RE.fullmatch(provider):
+        raise RouteError("expected provider/model[@effort]")
+    head, at, suffix = rest.rpartition("@")
+    model, effort = rest, None
+    if at and _LETTERS_RE.fullmatch(suffix):
+        if suffix not in EFFORT_LADDER:
+            raise RouteError(f"unknown effort {suffix!r} (one of {', '.join(EFFORT_LADDER)})")
+        model, effort = head, suffix
+    elif at and not suffix:
+        raise RouteError("empty effort after '@'")
+    if not model:
+        raise RouteError("empty model")
+    return Route(provider, model, effort)
+
+
+@dataclasses.dataclass(frozen=True)
+class RouteCatalog:
+    routes: Mapping[str, Route] = dataclasses.field(default_factory=dict)
+    malformed: int = 0
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self.routes)
+
+
+def load_route_catalog(delegation_cfg: Mapping[str, Any]) -> RouteCatalog:
+    raw = delegation_cfg.get("routes")
+    if not isinstance(raw, list):
+        if raw is None:
+            return RouteCatalog()
+        _warn_once(f"routes:{raw!r}", "delegation.routes must be a list of provider/model[@effort] ids; got %r", raw)
+        return RouteCatalog(malformed=1)
+    routes: dict[str, Route] = {}
+    malformed = 0
+    for entry in raw:
+        try:
+            route = parse_route_id(entry)
+        except RouteError as exc:
+            _warn_once(f"entry:{entry!r}", "Ignoring delegation.routes entry %r: %s", entry, exc)
+            malformed += 1
+            continue
+        routes.setdefault(route.id, route)
+    return RouteCatalog(routes, malformed)
+
+
+@dataclasses.dataclass(frozen=True)
+class ChildRoute:
+    creds: Mapping[str, Any]
+    routing_cfg: Mapping[str, Any]
+    route_id: Optional[str] = None
+    reasoning_config: Optional[dict[str, Any]] = None
+
+    def build_kwargs(self) -> dict[str, Any]:
+        creds = self.creds
+        return {
+            "model": creds["model"], "override_provider": creds["provider"], "override_base_url": creds["base_url"],
+            "override_api_key": creds["api_key"], "override_api_mode": creds["api_mode"],
+            "override_request_overrides": creds.get("request_overrides"),
+            "override_acp_command": creds.get("command"), "override_acp_args": creds.get("args"),
+            "routing_cfg": self.routing_cfg, "override_reasoning_config": self.reasoning_config,
+        }
+
+    def identity(self, parent_agent: Any) -> dict[str, Optional[str]]:
+        from tools.delegate_tool_child_run import _str_or_none
+        return {
+            "model": _str_or_none(self.creds.get("model") or getattr(parent_agent, "model", None)),
+            "provider": _str_or_none(self.creds.get("provider") or getattr(parent_agent, "provider", None)),
+            "route": self.route_id,
+        }
+
+
+def default_child_route(routing_cfg: Mapping[str, Any], parent_agent: Any) -> ChildRoute:
+    from tools.delegate_tool import _resolve_delegation_credentials
+    return ChildRoute(_resolve_delegation_credentials(routing_cfg, parent_agent), routing_cfg)
+
+
+def resolve_route(route: Route, parent_agent: Any) -> ChildRoute:
+    from tools.delegate_tool import _resolve_delegation_credentials
+    block = route.routing_block()
+    creds = _resolve_delegation_credentials(block, parent_agent, owner="delegation.routes")
+    return ChildRoute(creds, block, route.id, route.reasoning_config())
+
+
+def _route_problem(index: int, raw: Any, catalog: RouteCatalog) -> Optional[str]:
+    if not isinstance(raw, str) or not raw:
+        return f"Task {index} 'route' must be a non-empty string naming one of delegation.routes."
+    if not catalog.routes:
+        state = "has no valid entries" if catalog.malformed else "is empty"
+        return (f"Task {index} names route {raw!r}, but delegation.routes {state}. Omit 'route' to use the "
+                "default subagent model.")
+    if raw not in catalog.routes:
+        return f"Task {index} route {raw!r} is not in delegation.routes."
+    return None
+
+
+def plan_child_routes(
+    task_list: Sequence[Mapping[str, Any]], *, catalog: RouteCatalog, routing_cfg: Mapping[str, Any], parent_agent: Any,
+) -> tuple[list[ChildRoute], Optional[str]]:
+    routed = {i: task["route"] for i, task in enumerate(task_list) if "route" in task}
+    problems = [problem for i, raw in routed.items() if (problem := _route_problem(i, raw, catalog))]
+    if problems:
+        configured = f" Configured: {', '.join(catalog.ids)}." if catalog.routes else ""
+        return [], " ".join(problems) + configured
+    keys = [routed.get(i) for i in range(len(task_list))]
+    resolved: dict[Optional[str], ChildRoute] = {}
+    failures: dict[Optional[str], ValueError] = {}
+    for key in dict.fromkeys(keys):
+        try:
+            resolved[key] = (default_child_route(routing_cfg, parent_agent) if key is None
+                             else resolve_route(catalog.routes[key], parent_agent))
+        except ValueError as exc:
+            failures[key] = exc
+    if not failures:
+        return [resolved[key] for key in keys], None
+    if not routed:
+        return [], str(failures[None])
+    return [], " ".join(_resolution_failure(key, exc, keys) for key, exc in failures.items())
+
+
+def _resolution_failure(key: Optional[str], exc: ValueError, keys: Sequence[Optional[str]]) -> str:
+    indexes = ", ".join(str(i) for i, k in enumerate(keys) if k == key)
+    if key is None:
+        return f"Task(s) {indexes} (default route): {exc}"
+    return f"Task(s) {indexes}: route {key!r} (delegation.routes) cannot be used: {exc}"
+
+
+ROUTE_DESCRIPTION = (
+    "Optional. Run this child on one of the operator's routes (provider/model@effort, set in delegation.routes). "
+    "Omit to use the default subagent model. Each result reports the model the child ran on."
+)
+
+DESCRIPTION_TAIL_WITH_ROUTES = (
+    "- Children inherit the parent model unless a task names a `route`, or delegation.provider / delegation.model in "
+    "config.yaml pins them."
+)
+
+
+def route_schema_property(catalog: RouteCatalog) -> Optional[dict[str, Any]]:
+    if not catalog.routes:
+        return None
+    return {"type": "string", "enum": list(catalog.ids), "description": ROUTE_DESCRIPTION}

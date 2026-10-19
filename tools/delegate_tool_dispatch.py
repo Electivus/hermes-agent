@@ -15,12 +15,13 @@ from typing import Any, Dict, List, Optional
 
 from hermes_cli.observability.shared_metrics_loop import begin_delegation_run, finish_delegation_unit
 from tools.async_delegation import _new_delegation_id, record_unit_child
-from tools.delegate_tool_child_run import _attach_child, _detach_child, _fabricated_entry, _signal_child_stop
+from tools.delegate_tool_child_run import _attach_child, _detach_child, _fabricated_entry, _signal_child_stop, _str_or_none
 from tools.delegate_tool_progress import (
     SUBAGENT_FAILURE_STATUSES, _print_completion_line, _quiet, describe_subagent_failure, format_batch_tag,
 )
 from tools.delegate_tool_registry import _capture_gateway_steer_authority
 from tools.delegate_tool_results import _finalize_child_results
+from tools.delegation_live_log import shared_value
 
 logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
 
@@ -33,7 +34,6 @@ class _Batch:
     task_list: list[dict[str, Any]]
     children: list[tuple]
     parent_agent: Any
-    creds: dict[str, Any]
     context: Optional[str]
     top_role: str
     max_children: int
@@ -389,6 +389,7 @@ def _dispatch_unit(unit: _Batch, unit_id: Optional[str], slot_key: Optional[str]
     """Hand ONE unit to the async registry; the runner joins on that unit's children only."""
     from tools.async_delegation import dispatch_async_delegation_batch
     child_agents = [c for (_, _, c) in unit.children]
+    models = [_str_or_none(getattr(c, "model", None)) for c in child_agents]
 
     def _interrupt():
         for c in child_agents:
@@ -398,9 +399,7 @@ def _dispatch_unit(unit: _Batch, unit_id: Optional[str], slot_key: Optional[str]
         # Call-wide goals: completion formatting indexes them by task_index.
         goals=[t["goal"] for t in unit.task_list], context=unit.context,
         toolsets=None,  # metadata for the completion block only; subagents inherit the parent's toolsets
-        # creds["model"] is None when delegation.model is blank (children inherit): report what the child runs on.
-        role=unit.top_role, model=unit.creds["model"] or next(
-            (getattr(c, "model", None) for c in child_agents if getattr(c, "model", None)), None),
+        role=unit.top_role, model=shared_value(models) or ("mixed" if any(models) else None),
         runner=lambda: _execute_and_aggregate(unit, honor_parent_interrupt=False),
         interrupt_fn=_interrupt, delegation_id=unit_id, slot_key=slot_key,
         task_indexes=[i for (i, _, _) in unit.children] if len(unit.children) < len(unit.task_list) else None,

@@ -234,8 +234,7 @@ def wrap_progress_callback(inner_cb, writer: LiveTranscriptWriter):
 
 def create_live_transcripts(
     task_list: list[dict[str, Any]], context: Optional[str] = None,
-    delegation_id: Optional[str] = None, model: Optional[str] = None,
-    provider: Optional[str] = None,
+    delegation_id: Optional[str] = None, identities: Optional[list[dict[str, Optional[str]]]] = None,
     home: Optional[Path] = None,
 ) -> tuple[Optional[str], list[Optional[LiveTranscriptWriter]], list[str]]:
     """One pre-headered writer per task + a manifest.json; prunes stale dirs.
@@ -260,7 +259,7 @@ def create_live_transcripts(
         paths: list[str] = [str(w.path) for w in made if w.path is not None]
         if not paths:
             return None, [None] * n, []
-        _write_manifest(deleg_id, task_list, paths, model=model, provider=provider, home=home)
+        _write_manifest(deleg_id, task_list, paths, identities=identities, home=home)
         return deleg_id, writers, paths
     return None, [None] * n, []
 
@@ -269,18 +268,29 @@ def _manifest_path(delegation_id: str, home: Optional[Path] = None) -> Path:
     return live_transcript_root(home) / delegation_id / "manifest.json"
 
 
-def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]],
-                    paths: list[str], model: Optional[str] = None,
-                    provider: Optional[str] = None, home: Optional[Path] = None) -> None:
+def shared_value(values) -> Optional[str]:
+    distinct = set(filter(None, values))
+    return distinct.pop() if len(distinct) == 1 else None
+
+
+def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]], paths: list[str],
+                    identities: Optional[list[dict[str, Optional[str]]]] = None,
+                    home: Optional[Path] = None) -> None:
+    identities = identities or []
+    routes = {i.get("route") for i in identities}
     with _best_effort("manifest write"):
         _dump_json(_manifest_path(delegation_id, home), {
             "delegation_id": delegation_id, "started": time.strftime(_TIME_FMT),
-            "task_count": len(task_list), "model": model, "provider": provider,
+            "task_count": len(task_list),
+            "model": shared_value(i.get("model") for i in identities),
+            "provider": shared_value(i.get("provider") for i in identities),
+            "route": routes.pop() if len(routes) == 1 else None,
             "tasks": [{
                 "index": i,
                 # Same mounted dir as the .log files, so the goal needs the same redaction.
                 "goal": _redact(str(t.get("goal", ""))[:500]),
                 "log": paths[i] if i < len(paths) else None,
+                **(identities[i] if i < len(identities) else {}),
                 "status": "running"} for i, t in enumerate(task_list)]})
 
 
@@ -302,9 +312,7 @@ def update_manifest_statuses(delegation_id: Optional[str],
                     task["exit_reason"] = r["exit_reason"]
                 if r.get("model"):
                     task["model"] = r["model"]
-        # The dispatch-time model is only the delegation.model override (None when children inherit the parent's).
-        if not manifest.get("model"):
-            manifest["model"] = next((t["model"] for t in manifest.get("tasks", []) if t.get("model")), None)
+        manifest["model"] = shared_value(t.get("model") for t in manifest.get("tasks", []))
         manifest["completed"] = time.strftime(_TIME_FMT)
         _dump_json(mp, manifest)
 

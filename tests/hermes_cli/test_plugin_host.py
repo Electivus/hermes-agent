@@ -10,6 +10,7 @@ import pytest
 
 from hermes_cli import plugins as plugins_mod
 from hermes_cli.plugins import PluginManager
+from tests.hermes_cli.plugin_host_support import home_with_plugins
 
 PROBE_PLUGIN = '''
 import json, os
@@ -44,31 +45,13 @@ def register(ctx):
 '''
 
 
-def _home_with_plugins(tmp_path, monkeypatch, plugins: dict, isolation="host"):
-    home = tmp_path / ".hermes"
-    home.mkdir(parents=True, exist_ok=True)
-    for name, body in plugins.items():
-        plugin_dir = home / "plugins" / name
-        plugin_dir.mkdir(parents=True)
-        (plugin_dir / "plugin.yaml").write_text(yaml.safe_dump({"name": name, "version": "1.0"}), encoding="utf-8")
-        (plugin_dir / "__init__.py").write_text(body, encoding="utf-8")
-    (home / "config.yaml").write_text(yaml.safe_dump(
-        {"plugins": {"enabled": list(plugins), "isolation": isolation}}), encoding="utf-8")
-    empty_bundled = tmp_path / "bundled"
-    empty_bundled.mkdir()
-    monkeypatch.setenv("HOME", str(tmp_path / "os-home"))
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: empty_bundled)
-    return home
-
-
 @pytest.mark.platforms("posix")  # os._exit / SIGKILL process semantics
 def test_plugin_runs_out_of_process_with_ctx_round_trips_and_survives_host_crash(tmp_path, monkeypatch):
     from agent import image_gen_registry
     from agent.image_gen_provider import ImageGenProvider
     from tools.registry import registry
 
-    _home_with_plugins(tmp_path, monkeypatch, {"hostprobe": PROBE_PLUGIN, "platformprobe": PLATFORM_PLUGIN})
+    home_with_plugins(tmp_path, monkeypatch, {"hostprobe": PROBE_PLUGIN, "platformprobe": PLATFORM_PLUGIN})
     manager = PluginManager()
     manager.discover_and_load()
     try:
@@ -110,7 +93,7 @@ def test_isolation_host_keeps_every_user_import_path_out_of_process(tmp_path, mo
     from hermes_cli.plugin_isolation_audit import audit_plugin_dir
     from plugins import plugin_loader
 
-    home = _home_with_plugins(tmp_path, monkeypatch, {"platformprobe": PLATFORM_PLUGIN, "fine": PROBE_PLUGIN})
+    home = home_with_plugins(tmp_path, monkeypatch, {"platformprobe": PLATFORM_PLUGIN, "fine": PROBE_PLUGIN})
     # Category loaders' in-process import refuses user code under host isolation (the backstop
     # behind the memory / context-engine / cron host routes).
     import logging
@@ -131,7 +114,7 @@ def test_managed_scope_pins_host_isolation_over_the_profiles_own_config(tmp_path
     from hermes_cli import managed_scope
     from tools.registry import registry
 
-    _home_with_plugins(tmp_path, monkeypatch, {"hostprobe": PROBE_PLUGIN}, isolation="in_process")
+    home_with_plugins(tmp_path, monkeypatch, {"hostprobe": PROBE_PLUGIN}, isolation="in_process")
     managed = tmp_path / "managed"
     managed.mkdir()
     (managed / "config.yaml").write_text(yaml.safe_dump({"plugins": {"isolation": "host"}}), encoding="utf-8")
@@ -166,7 +149,7 @@ register_provider(HostModel(name="hostmodel", base_url="https://hostmodel.exampl
 def test_model_provider_profile_data_is_local_and_overrides_run_in_the_host(tmp_path, monkeypatch):
     import providers
 
-    home = _home_with_plugins(tmp_path, monkeypatch, {})
+    home = home_with_plugins(tmp_path, monkeypatch, {})
     plugin_dir = home / "plugins" / "model-providers" / "hostmodel"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "plugin.yaml").write_text("name: hostmodel\nkind: model-provider\n", encoding="utf-8")
@@ -209,7 +192,7 @@ def test_async_plugin_code_calls_back_in_the_callers_session(tmp_path, monkeypat
     registry.register(name="session_probe", toolset="asyncprobe", schema={"name": "session_probe",
                       "description": "d", "parameters": {"type": "object", "properties": {}}},
                       handler=lambda args, **kw: json.dumps({"session": session.get()}))
-    _home_with_plugins(tmp_path, monkeypatch, {"asyncprobe": ASYNC_PLUGIN})
+    home_with_plugins(tmp_path, monkeypatch, {"asyncprobe": ASYNC_PLUGIN})
     manager = PluginManager()
     manager.discover_and_load()
     try:
@@ -253,7 +236,7 @@ def test_hosted_memory_provider_stays_live_across_a_host_crash(tmp_path, monkeyp
     from plugins.memory import load_memory_provider
     from plugins.memory.config_schema import get_provider_config_schema
 
-    home = _home_with_plugins(tmp_path, monkeypatch, {})
+    home = home_with_plugins(tmp_path, monkeypatch, {})
     provider_dir = home / "plugins" / "memprobe"
     provider_dir.mkdir(parents=True)
     (provider_dir / "__init__.py").write_text(MEMORY_PLUGIN, encoding="utf-8")
@@ -319,7 +302,7 @@ def register(ctx):
 
     monkeypatch.setattr("tools.delegate_tool._build_child_agent", build)
     monkeypatch.setattr("tools.delegate_tool._run_single_child", run)
-    _home_with_plugins(tmp_path, monkeypatch, {"hostlife": body})
+    home_with_plugins(tmp_path, monkeypatch, {"hostlife": body})
     manager = PluginManager()
     manager.discover_and_load()
     service = SubagentLifecycleService(lambda: parent)

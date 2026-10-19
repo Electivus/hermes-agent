@@ -82,3 +82,28 @@ delegation config > parent; the selected provider supplies its own credential
 bundle. An unresolvable provider raises `SubagentLifecycleError` before launch.
 Core does not expose `provider` to the model: the plugin chooses it, for example
 from operator config.
+
+## Routes
+
+`routes()` returns the ids in the operator's `delegation.routes` that
+`delegate_task` accepts right now, as a tuple of `provider/model[@effort]`
+strings in config order. Malformed entries are left out, and an empty tuple
+means no routes are configured. The call needs no active parent session, so a
+plugin CLI command can use it. It is read-only: a plugin can read the list but
+never add to it. Under `plugins.isolation: host` the result crosses the host
+boundary as a list.
+
+```python
+def native_routes(ctx):
+    # An older Hermes has no routes() and no per-task routes. In process that raises AttributeError. Under
+    # plugins.isolation: host the host reports the missing method as a RuntimeError, which hasattr() lets through.
+    try:
+        routes = ctx.subagent_lifecycle.routes
+    except (AttributeError, RuntimeError):
+        return None
+    return frozenset(routes())
+```
+
+A plugin that tells the model to name a route should name only an id from this
+list. `delegate_task` refuses any other value, and it re-reads the list on every
+call, so a route the operator removes stops working on the next call.

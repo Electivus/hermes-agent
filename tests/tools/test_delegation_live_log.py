@@ -412,23 +412,39 @@ def test_prune_sweeps_the_pinned_root_not_ambient(tmp_path, monkeypatch):
     assert stale_ambient.exists(), "ambient root is not this dispatch's root"
 
 
-def test_manifest_includes_model_and_provider():
-    """The manifest.json should record the model and provider used for the delegation."""
-    delegation_id, _writers, _paths = create_live_transcripts(
-        [{"goal": "task 1"}, {"goal": "task 2"}],
-        model="openrouter/gpt-4o",
-        provider="openrouter",
-    )
+def _manifest(delegation_id):
+    return json.loads((live_transcript_root() / delegation_id / "manifest.json").read_text(encoding="utf-8"))
 
-    manifest = json.loads(
-        (live_transcript_root() / delegation_id / "manifest.json").read_text(
-            encoding="utf-8"
+
+def test_manifest_records_each_tasks_identity_and_the_shared_one_on_top():
+    uniform = {"model": "openrouter/gpt-4o", "provider": "openrouter", "route": None}
+    routed = {"model": "claude-opus-5-5", "provider": "anthropic", "route": "anthropic/claude-opus-5-5@xhigh"}
+    for identities, top in (
+        ([uniform, uniform], ("openrouter/gpt-4o", "openrouter", None)),
+        ([routed, routed], ("claude-opus-5-5", "anthropic", "anthropic/claude-opus-5-5@xhigh")),
+        ([uniform, routed], (None, None, None)),
+    ):
+        delegation_id, _writers, _paths = create_live_transcripts(
+            [{"goal": "task 1"}, {"goal": "task 2"}], identities=identities,
         )
-    )
-    assert manifest["model"] == "openrouter/gpt-4o"
-    assert manifest["provider"] == "openrouter"
-    # tasks array should not be affected
-    assert len(manifest["tasks"]) == 2
+
+        manifest = _manifest(delegation_id)
+        assert (manifest["model"], manifest["provider"], manifest["route"]) == top
+        assert [{k: t[k] for k in ("model", "provider", "route")} for t in manifest["tasks"]] == identities
+
+
+def test_manifest_top_level_model_follows_what_the_tasks_ran_on():
+    inherited = {"model": "original-model", "provider": "openrouter", "route": None}
+    tasks = [{"goal": "task 1"}, {"goal": "task 2"}]
+    both = create_live_transcripts(tasks, identities=[inherited, inherited])[0]
+    one = create_live_transcripts(tasks, identities=[inherited, inherited])[0]
+
+    update_manifest_statuses(both, [{"task_index": i, "status": "completed", "model": "fallback-model"} for i in (0, 1)])
+    update_manifest_statuses(one, [{"task_index": 0, "status": "completed", "model": "fallback-model"},
+                                   {"task_index": 1, "status": "completed", "model": "original-model"}])
+
+    assert _manifest(both)["model"] == "fallback-model"
+    assert _manifest(one)["model"] is None
 
 
 

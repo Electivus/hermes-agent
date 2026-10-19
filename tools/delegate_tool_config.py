@@ -15,12 +15,11 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 _RUNTIME_PROVIDER_CUSTOM = "custom"
 
 _DEFAULT_MAX_CONCURRENT_CHILDREN = 10
-# One-shot guard: _get_max_concurrent_children() runs on every get_definitions()
-# schema rebuild, so the >10 cost advisory would otherwise log on every turn.
-_HIGH_CONCURRENCY_WARNED = False
+# Config advisories warn once per process: the knobs are re-read on every get_definitions() schema rebuild, so they
+# would otherwise log on every turn.
+_WARNED: set[str] = set()
 MAX_DEPTH = 1  # flat by default: parent (0) -> child (1); deeper needs max_spawn_depth
 _MIN_SPAWN_DEPTH = 1  # floor for the configurable cap; MAX_DEPTH stays the default
-_LEGACY_MAX_ASYNC_WARNED = False
 # No default wall-clock cap on children: legitimate heavy work (deep reviews, research fan-outs, slow reasoning
 # models) was being killed mid-task. Stuck-child detection is the heartbeat staleness monitor;
 # delegation.child_timeout_seconds opts back in.
@@ -76,10 +75,9 @@ def _knob(key: str, env_var: Optional[str], parse, default, invalid_msg: str):
             pass
     return default
 
-def _warn_once(flag_name: str, message: str, *args: Any) -> None:
-    """Module-global one-shot warning (``flag_name`` is the ``_*_WARNED`` global)."""
-    if not globals()[flag_name]:
-        globals()[flag_name] = True
+def _warn_once(key: str, message: str, *args: Any) -> None:
+    if key not in _WARNED:
+        _WARNED.add(key)
         logger.warning(message, *args)
 
 def _get_oneshot_max_children() -> int:
@@ -376,44 +374,53 @@ def _direct_endpoint_credentials(v: dict, explicit_request_overrides) -> dict:
         _merge_request_overrides(request_overrides, explicit_request_overrides),
     )
 
-def _runtime_provider_credentials(v: dict, explicit_request_overrides) -> dict:
+def _provider_unusable(owner: str, provider: str, cause: str, delegation_message: str) -> str:
+    if owner == "delegation":
+        return delegation_message
+    return f"provider '{provider}' is not configured ({cause}). Run `hermes auth` or `hermes model` to set it up."
+
+def _runtime_provider_credentials(v: dict, explicit_request_overrides, owner: str) -> dict:
     """``delegation.provider`` branch: full bundle via the runtime provider system."""
     configured_provider = v["provider"]
     try:
         from hermes_cli.runtime_provider import resolve_runtime_provider
         runtime = resolve_runtime_provider(requested=configured_provider, target_model=v["model"])
     except Exception as exc:
-        raise ValueError(
+        raise ValueError(_provider_unusable(
+            owner, configured_provider, str(exc),
             f"Cannot resolve delegation provider '{configured_provider}': {exc}. "
             f"Check that the provider is configured (API key set, valid provider name), "
             f"or set delegation.base_url/delegation.api_key for a direct endpoint. "
-            f"Available providers: openrouter, nous, zai, kimi-coding, minimax."
-        ) from exc
+            f"Available providers: openrouter, nous, zai, kimi-coding, minimax.",
+        )) from exc
 
     api_key = runtime.get("api_key", "")
     if not api_key:
-        raise ValueError(
+        raise ValueError(_provider_unusable(
+            owner, configured_provider, "it resolved without an API key",
             f"Delegation provider '{configured_provider}' resolved but has no API key. "
-            f"Set the appropriate environment variable or run 'hermes auth'."
-        )
+            f"Set the appropriate environment variable or run 'hermes auth'.",
+        ))
     # A pinned ACP transport command must exist — refuse the spawn loudly rather than letting the child
     # silently fall back to another transport (#80450).
     pinned_command = runtime.get("command")
-    _require_pinned_command(
-        pinned_command, f"Delegation provider '{configured_provider}' is pinned to the "
+    _require_pinned_command(pinned_command, _provider_unusable(
+        owner, configured_provider, f"its '{pinned_command}' command was not found on PATH",
+        f"Delegation provider '{configured_provider}' is pinned to the "
         f"'{pinned_command}' command, which was not found on PATH. "
         f"Install it or choose a different delegation provider.",
-    )
+    ))
     # A provider override is assembled into the child as one bundle (see _resolve_child_runtime), so it must
     # carry its own endpoint. ACP transports are addressed by command and native-SDK providers by their SDK,
     # so neither needs a URL; anything else without one would otherwise be built with no endpoint at all.
     if (not runtime.get("base_url") and not pinned_command
             and configured_provider.strip().lower() not in _NATIVE_SDK_PROVIDERS):
-        raise ValueError(
+        raise ValueError(_provider_unusable(
+            owner, configured_provider, "it resolved without a base_url",
             f"Delegation provider '{configured_provider}' resolved without a base_url. "
             f"Refusing to build a subagent with an incomplete credential bundle — check the provider's "
-            f"configuration / auth, or set delegation.base_url for a direct endpoint."
-        )
+            f"configuration / auth, or set delegation.base_url for a direct endpoint.",
+        ))
     return _credential_bundle(
         v["model"] or runtime.get("model") or None,
         configured_provider if runtime.get("provider") == _RUNTIME_PROVIDER_CUSTOM else runtime.get("provider"),
@@ -422,12 +429,13 @@ def _runtime_provider_credentials(v: dict, explicit_request_overrides) -> dict:
         command=pinned_command, args=list(runtime.get("args") or []),
     )
 
-def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
+def _resolve_delegation_credentials(cfg: dict, parent_agent, *, owner: str = "delegation") -> dict:
     """Child credential bundle from the ``delegation`` config section. Three branches: ``base_url`` set → direct
     endpoint (``api_key`` None means inherit the parent's key, so providers keyed outside OPENAI_API_KEY work);
     ``provider`` set → full bundle via the runtime provider system (same path as CLI/gateway startup); neither →
     None values, child inherits everything. ``request_overrides`` is honored on every branch. Raises ValueError
-    with a user-facing message."""
+    with a user-facing message worded for ``owner``, the config block that names the provider (``delegation`` or
+    ``delegation.routes``)."""
     values = {k: str(cfg.get(k) or "").strip() or None for k in ("model", "provider", "base_url", "api_key")}
     values["api_mode"] = str(cfg.get("api_mode") or "").strip().lower() or None
     explicit_request_overrides = cfg.get("request_overrides") if isinstance(cfg.get("request_overrides"), dict) else None
@@ -441,7 +449,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
             values["model"], None, None, None, None,
             _merge_request_overrides(getattr(parent_agent, "request_overrides", None), explicit_request_overrides),
         )
-    return _runtime_provider_credentials(values, explicit_request_overrides)
+    return _runtime_provider_credentials(values, explicit_request_overrides, owner)
 
 def _load_config() -> dict:
     """The ``delegation`` config section (read-only — do NOT mutate). Prefers the shared ``load_config_readonly()``
@@ -488,17 +496,32 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg: Any, pinned: bool) 
         pinned=pinned, owner="delegation")
 
 
+def _child_reasoning_config(
+    parent_agent, delegation_cfg: dict, override_reasoning_config: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if override_reasoning_config is not None:
+        return override_reasoning_config
+    delegation_effort = delegation_cfg.get("reasoning_effort")
+    if delegation_effort or delegation_effort is False:
+        from hermes_constants import parse_reasoning_effort
+        parsed = parse_reasoning_effort(delegation_effort)
+        if parsed is not None:
+            return parsed
+        logger.warning("Unknown delegation.reasoning_effort '%s', inheriting parent level", delegation_effort)
+    return getattr(parent_agent, "reasoning_config", None)
+
+
 def _resolve_child_runtime(
     parent_agent, delegation_cfg: dict, parent_api_key: Any, *, model: Optional[str], override_provider: Optional[str],
     override_base_url: Optional[str], override_api_key: Optional[str], override_api_mode: Optional[str],
     override_acp_command: Optional[str], override_acp_args: Optional[list[str]],
-    routing_cfg: Optional[dict[str, Any]] = None,
+    routing_cfg: Optional[dict[str, Any]] = None, override_reasoning_config: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Child credentials, transport and routing (config override > parent inherit) as ``AIAgent`` kwargs. Rules that
-    are easy to break: api_mode is re-derived (not inherited) when the child's provider differs from the parent's
-    or is Nous Portal (dual-wire); a pinned ``delegation.command`` must exist on PATH or the spawn fails loudly;
-    ``override_provider`` clears the parent's ACP transport, fallback chain and OpenRouter routing filters so the
-    pinned provider is actually honoured."""
+    are easy to break: api_mode is re-derived (not inherited) when the child's provider is pinned, differs from the
+    parent's, or is Nous Portal (dual-wire); a pinned ``delegation.command`` must exist on PATH or the spawn fails
+    loudly; ``override_provider`` clears the parent's ACP transport, fallback chain and OpenRouter routing filters so
+    the pinned provider is actually honoured."""
     effective_model = model or parent_agent.model
     # provider/base_url are one bundle: all from the override, or all from the parent. Per-field fallback built
     # children like an override provider pointed at the PARENT's endpoint (e.g. copilot credentials on the
@@ -514,22 +537,15 @@ def _resolve_child_runtime(
     else:
         effective_provider = getattr(parent_agent, "provider", None)
         effective_base_url, parent_api_key = _inherit_parent_endpoint(parent_agent, parent_agent.base_url, parent_api_key)
-    # api_mode: each provider has its own wire, so a different provider re-derives (None) instead of inheriting (404s
-    # otherwise). Nous Portal is dual-wire within one provider (anthropic/* → Messages, else chat_completions), so
-    # same-provider inheritance would pin the child on the wrong wire — re-derive.
-    # Bug #20558 / PR #20563: api_mode must NOT be inherited when the child uses a different provider than
-    # the parent — each provider has its own API surface (e.g. MiniMax uses anthropic_messages, DeepSeek
-    # uses chat_completions). Inheriting the parent's mode causes 404 errors when the child routes to the
-    # wrong endpoint. Derive the mode from the target provider when it differs. Same-provider inheritance
-    # would pin a child Hermes/Qwen subagent onto the parent's Claude Messages wire (or the reverse).
-    # agent_init honors an explicit api_mode above its nous branch, so re-derive here before construction.
+    # Providers speak different wires (MiniMax anthropic_messages, DeepSeek chat_completions; Nous Portal both, by
+    # model), and a child sent on the parent's wire 404s (#20558).
     _parent_provider = getattr(parent_agent, "provider", None) or ""
-    if override_api_mode is not None:
+    if override_api_mode:
         effective_api_mode = override_api_mode
     elif (effective_provider or "").strip().lower() in _NOUS_PROVIDERS:
         from hermes_cli.providers import nous_api_mode
         effective_api_mode = nous_api_mode(effective_model)
-    elif effective_provider != _parent_provider:
+    elif override_provider or effective_provider != _parent_provider:
         effective_api_mode = None  # force re-derivation from provider's defaults
     else:
         effective_api_mode = getattr(parent_agent, "api_mode", None)
@@ -568,27 +584,12 @@ def _resolve_child_runtime(
             getattr(parent_agent, "requested_provider", None) or effective_provider
         )
 
-    # Reasoning: delegation.reasoning_effort > parent. Keep the raw value — a
-    # YAML ``false`` must disable thinking, not coerce to "" and inherit.
-    child_reasoning = getattr(parent_agent, "reasoning_config", None)
-    try:
-        delegation_effort = delegation_cfg.get("reasoning_effort")
-        if delegation_effort or delegation_effort is False:
-            from hermes_constants import parse_reasoning_effort
-            parsed = parse_reasoning_effort(delegation_effort)
-            if parsed is None:
-                logger.warning("Unknown delegation.reasoning_effort '%s', inheriting parent level", delegation_effort)
-            else:
-                child_reasoning = parsed
-    except Exception as exc:
-        logger.debug("Could not load delegation reasoning_effort: %s", exc)
-
     kwargs: dict[str, Any] = {
         "base_url": effective_base_url, "api_key": override_api_key or parent_api_key, "model": effective_model,
         "provider": effective_provider, "requested_provider": effective_requested_provider,
         "capabilities": _inherit_parent_capabilities(parent_agent, override_provider, override_base_url),
         "api_mode": effective_api_mode, "acp_command": effective_acp_command, "acp_args": effective_acp_args,
-        "reasoning_config": child_reasoning,
+        "reasoning_config": _child_reasoning_config(parent_agent, delegation_cfg, override_reasoning_config),
         # Resolve routing and recovery policy from the same configuration owner. A pinned provider, endpoint, or
         # model never borrows the parent's chain; an explicitly declared child chain still remains available.
         "fallback_model": _resolve_child_fallback_chain(

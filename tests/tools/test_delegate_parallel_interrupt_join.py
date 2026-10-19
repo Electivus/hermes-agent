@@ -20,7 +20,7 @@ def _batch(children, parent):
     tasks = [{"goal": f"task {i}"} for i in range(len(children))]
     return _Batch(
         task_list=tasks, children=[(i, tasks[i], c) for i, c in enumerate(children)],
-        parent_agent=parent, creds={}, context=None, top_role="leaf",
+        parent_agent=parent, context=None, top_role="leaf",
         max_children=len(children), live_deleg_id=None, live_writers=[], live_paths=[],
         origin_wake_sid="", origin_ui_session_id="", origin_owner_transport=None,
         origin_owner_session_record=None, origin_session_history_delivery=False,
