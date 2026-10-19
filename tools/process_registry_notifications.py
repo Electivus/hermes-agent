@@ -113,27 +113,28 @@ def _rejects_model(model: str, results) -> bool:
     if not model:
         return False
     patterns = _model_not_found_patterns()
-    texts = (" ".join(str(x) for x in (r.get("error"), r.get("summary")) if x).lower() for r in results or [])
+    texts = (" ".join(str(x) for x in (r.get("error"), r.get("summary")) if x).lower() for r in results)
     return any(model in text and any(p in text for p in patterns) for text in texts)
 
 
 def _route_model_rejected_lines(results) -> list[str]:
     from tools.delegate_tool_routes import parse_route_id
-    lines = []
-    for route_id, model in dict.fromkeys((r["route"], r.get("model") or "") for r in results if r.get("route")):
-        if _rejects_model(model, [r for r in results if (r.get("route"), r.get("model") or "") == (route_id, model)]):
-            lines.append(
-                f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
-                f'"{parse_route_id(route_id).provider}" rejected model "{model}". A route has no fallback chain; fix '
-                "the id in delegation.routes or name another route.")
-    return lines
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for r in results:
+        if r.get("route"):
+            groups.setdefault((r["route"], r.get("model") or ""), []).append(r)
+    return [
+        f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
+        f'"{parse_route_id(route_id).provider}" rejected model "{model}". A route has no fallback chain; fix '
+        "the id in delegation.routes or name another route."
+        for (route_id, model), group in groups.items() if _rejects_model(model, group)]
 
 
 def _delegation_model_not_found_notice(results) -> list[str] | None:
     config = _delegation_config()
-    results = [r for r in results or [] if isinstance(r, dict)]
     lines = _route_model_rejected_lines(results)
-    rejected = [r for r in results if not r.get("route") and _rejects_model(str(config.get("model") or ""), [r])]
+    configured_model = str(config.get("model") or "")
+    rejected = [r for r in results if not r.get("route") and _rejects_model(configured_model, [r])]
     if not rejected:
         return lines or None
     model = config.get("model") or "?"
@@ -227,6 +228,7 @@ def _recovery_lines(evt: dict) -> list[str]:
 
 def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> str:
     """Consolidated block for a delegate_task fan-out that finished as one unit."""
+    from tools.delegation_live_log import shared_value
     results, goals = evt.get("results") or [], evt.get("goals") or []
     # ``goals`` is the whole delegate_task call (task_index indexes it); ``results`` is this unit's subset.
     n, n_unit = len(goals) or len(results), len(results) or len(goals)
@@ -246,7 +248,7 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]
         return "\n".join(lines)
     lines += _notice_lines(results)
-    models_differ = len(set(filter(None, (r.get("model") for r in results)))) > 1
+    models_differ = shared_value(r.get("model") for r in results) is None
     for r in sorted(results, key=lambda x: x.get("task_index", 0)):
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
