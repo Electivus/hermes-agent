@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
 import re
 from typing import Any, Mapping, Optional, Sequence
 
 from agent.reasoning_effort import EFFORT_LADDER
 from hermes_constants import parse_reasoning_effort
-
-logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the origin module
+from tools.delegate_tool_config import _warn_once
 
 _PROVIDER_RE = re.compile(r"[A-Za-z0-9_.:-]+")
 _LETTERS_RE = re.compile(r"[A-Za-z]+")
-_WARNED_ENTRIES: set[str] = set()
 
 
 class RouteError(ValueError):
@@ -74,12 +71,6 @@ class RouteCatalog:
 
     def get(self, route_id: str) -> Optional[Route]:
         return self.routes.get(route_id)
-
-
-def _warn_once(key: str, message: str, *args: Any) -> None:
-    if key not in _WARNED_ENTRIES:
-        _WARNED_ENTRIES.add(key)
-        logger.warning(message, *args)
 
 
 def load_route_catalog(delegation_cfg: Optional[Mapping[str, Any]] = None) -> RouteCatalog:

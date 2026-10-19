@@ -15,12 +15,11 @@ logger = logging.getLogger("tools.delegate_tool")  # log-record parity with the 
 _RUNTIME_PROVIDER_CUSTOM = "custom"
 
 _DEFAULT_MAX_CONCURRENT_CHILDREN = 10
-# One-shot guard: _get_max_concurrent_children() runs on every get_definitions()
-# schema rebuild, so the >10 cost advisory would otherwise log on every turn.
-_HIGH_CONCURRENCY_WARNED = False
+# Config advisories warn once per process: the knobs are re-read on every get_definitions() schema rebuild, so they
+# would otherwise log on every turn.
+_WARNED: set[str] = set()
 MAX_DEPTH = 1  # flat by default: parent (0) -> child (1); deeper needs max_spawn_depth
 _MIN_SPAWN_DEPTH = 1  # floor for the configurable cap; MAX_DEPTH stays the default
-_LEGACY_MAX_ASYNC_WARNED = False
 # No default wall-clock cap on children: legitimate heavy work (deep reviews, research fan-outs, slow reasoning
 # models) was being killed mid-task. Stuck-child detection is the heartbeat staleness monitor;
 # delegation.child_timeout_seconds opts back in.
@@ -76,10 +75,9 @@ def _knob(key: str, env_var: Optional[str], parse, default, invalid_msg: str):
             pass
     return default
 
-def _warn_once(flag_name: str, message: str, *args: Any) -> None:
-    """Module-global one-shot warning (``flag_name`` is the ``_*_WARNED`` global)."""
-    if not globals()[flag_name]:
-        globals()[flag_name] = True
+def _warn_once(key: str, message: str, *args: Any) -> None:
+    if key not in _WARNED:
+        _WARNED.add(key)
         logger.warning(message, *args)
 
 def _get_oneshot_max_children() -> int:
