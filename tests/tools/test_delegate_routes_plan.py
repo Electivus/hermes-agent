@@ -12,8 +12,8 @@ def _assert_nothing_happened(harness, result):
     assert not root.exists() or not any(root.iterdir())
 
 
-def test_mixed_batch_builds_each_child_on_its_own_route(monkeypatch, tmp_path):
-    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+def test_mixed_batch_builds_each_child_on_its_own_route(tmp_path):
+    harness = Harness(tmp_path, {"routes": [OPUS, ASTRA]})
     result = harness.call([
         {"goal": "Review with opus", "route": OPUS},
         {"goal": "Review with astra", "route": ASTRA},
@@ -38,12 +38,12 @@ def test_mixed_batch_builds_each_child_on_its_own_route(monkeypatch, tmp_path):
     assert harness.parent._oneshot_children_spawned == 4
 
 
-def test_route_child_never_inherits_delegation_endpoint_overrides_or_fallback(monkeypatch, tmp_path):
+def test_route_child_never_inherits_delegation_endpoint_overrides_or_fallback(tmp_path):
     delegation_chain = [{"provider": "zai", "model": "glm-5"}]
-    harness = Harness(monkeypatch, tmp_path, {
+    harness = Harness(tmp_path, {
         "routes": [OPUS], "base_url": "https://delegation.invalid/v1", "api_key": "sk-delegation",
         "api_mode": "chat_completions", "request_overrides": {"service_tier": "flex"},
-        "fallback_providers": delegation_chain, "oneshot_max_children": 10,
+        "fallback_providers": delegation_chain,
     })
     harness.call([{"goal": "Review with opus", "route": OPUS}, {"goal": "Review on the default route"}])
 
@@ -57,8 +57,8 @@ def test_route_child_never_inherits_delegation_endpoint_overrides_or_fallback(mo
     assert unrouted["fallback_model"] == delegation_chain
 
 
-def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_path):
-    harness = Harness(monkeypatch, tmp_path, {"routes": [ASTRA], "oneshot_max_children": 10})
+def test_task_fields_cannot_supply_endpoint_key_or_transport(tmp_path):
+    harness = Harness(tmp_path, {"routes": [ASTRA]})
     harness.call([{
         "goal": "Review with astra", "route": ASTRA, "provider": "openrouter", "model": "attacker/model",
         "base_url": "https://attacker.invalid", "api_key": "sk-attacker", "api_mode": "chat_completions",
@@ -79,8 +79,8 @@ def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_pa
     ],
     ids=["route", "delegation.provider"],
 )
-def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(monkeypatch, tmp_path, config, task):
-    harness = Harness(monkeypatch, tmp_path, {**config, "oneshot_max_children": 10})
+def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(tmp_path, config, task):
+    harness = Harness(tmp_path, config)
     harness.call([task])
 
     (child,) = harness.built
@@ -98,11 +98,9 @@ def test_pinned_same_provider_child_derives_its_own_wire_never_the_parents(monke
     ],
 )
 def test_route_effort_beats_delegation_effort_which_beats_the_parent(
-    monkeypatch, tmp_path, delegation_effort, route, expected,
+    tmp_path, delegation_effort, route, expected,
 ):
-    harness = Harness(monkeypatch, tmp_path, {
-        "routes": [route], "reasoning_effort": delegation_effort, "oneshot_max_children": 10,
-    })
+    harness = Harness(tmp_path, {"routes": [route], "reasoning_effort": delegation_effort})
     harness.call([{"goal": "Review with opus", "route": route}])
 
     assert harness.built[0]["reasoning_config"] == expected
@@ -119,8 +117,8 @@ def test_route_effort_beats_delegation_effort_which_beats_the_parent(
         (["no-slash", "anthropic/claude-opus-5-5@typo"], OPUS, ["Task 0", "delegation.routes has no valid entries"]),
     ],
 )
-def test_unusable_route_refuses_the_call_before_any_side_effect(monkeypatch, tmp_path, routes, task_route, expected):
-    harness = Harness(monkeypatch, tmp_path, {"routes": routes, "oneshot_max_children": 10})
+def test_unusable_route_refuses_the_call_before_any_side_effect(tmp_path, routes, task_route, expected):
+    harness = Harness(tmp_path, {"routes": routes})
     result = harness.call([{"goal": "Review the module", "route": task_route}])
 
     _assert_nothing_happened(harness, result)
@@ -129,8 +127,8 @@ def test_unusable_route_refuses_the_call_before_any_side_effect(monkeypatch, tmp
         assert text in result["error"]
 
 
-def test_every_failing_task_is_named_in_one_error(monkeypatch, tmp_path):
-    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+def test_every_failing_task_is_named_in_one_error(tmp_path):
+    harness = Harness(tmp_path, {"routes": [OPUS, ASTRA]})
     result = harness.call([
         {"goal": "Review with a typo", "route": "anthropic/claude-opus-5-5@max"},
         {"goal": "Review with astra", "route": ASTRA},
@@ -143,9 +141,9 @@ def test_every_failing_task_is_named_in_one_error(monkeypatch, tmp_path):
     assert f"Configured: {OPUS}, {ASTRA}" in result["error"]
 
 
-def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_path):
+def test_resolution_failure_on_a_later_route_builds_nothing(tmp_path):
     runtimes = {**RUNTIMES, "xai-oauth": RuntimeError("xai-oauth is not logged in")}
-    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, GROK], "oneshot_max_children": 10}, runtimes)
+    harness = Harness(tmp_path, {"routes": [OPUS, GROK]}, runtimes)
     result = harness.call([
         {"goal": "Review with opus", "route": OPUS},
         {"goal": "Review with grok", "route": GROK},
@@ -167,9 +165,8 @@ def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_pat
     ],
     ids=["unresolved", "no-key", "no-endpoint"],
 )
-def test_unresolvable_route_gets_route_advice_never_the_delegation_endpoint_advice(monkeypatch, tmp_path, runtime, cause):
-    harness = Harness(monkeypatch, tmp_path, {"routes": [GROK], "oneshot_max_children": 10},
-                      {**RUNTIMES, "xai-oauth": runtime})
+def test_unresolvable_route_gets_route_advice_never_the_delegation_endpoint_advice(tmp_path, runtime, cause):
+    harness = Harness(tmp_path, {"routes": [GROK]}, {**RUNTIMES, "xai-oauth": runtime})
     result = harness.call([{"goal": "Review with grok", "route": GROK}])
 
     _assert_nothing_happened(harness, result)
@@ -179,12 +176,12 @@ def test_unresolvable_route_gets_route_advice_never_the_delegation_endpoint_advi
     assert "delegation.base_url" not in error and "Delegation provider" not in error
 
 
-def test_every_route_that_fails_to_resolve_is_named_in_one_error(monkeypatch, tmp_path):
+def test_every_route_that_fails_to_resolve_is_named_in_one_error(tmp_path):
     runtimes = {**RUNTIMES, "xai-oauth": RuntimeError("xai-oauth is not logged in"),
                 "openai-codex": RuntimeError("openai-codex is not logged in"),
                 "unconfigured": RuntimeError("Unknown provider 'unconfigured'")}
-    config = {"routes": [OPUS, ASTRA, GROK], "provider": "unconfigured", "oneshot_max_children": 10}
-    harness = Harness(monkeypatch, tmp_path, config, runtimes)
+    config = {"routes": [OPUS, ASTRA, GROK], "provider": "unconfigured"}
+    harness = Harness(tmp_path, config, runtimes)
     result = harness.call([
         {"goal": "Review with grok", "route": GROK},
         {"goal": "Review on the default route"},
@@ -201,23 +198,21 @@ def test_every_route_that_fails_to_resolve_is_named_in_one_error(monkeypatch, tm
     assert "Task(s) 1" in error and "Unknown provider 'unconfigured'" in error
     assert "Task(s) 3" not in error and OPUS not in error
 
-    default_only = Harness(monkeypatch, tmp_path, config, runtimes)
+    default_only = Harness(tmp_path, config, runtimes)
     assert default_only.call([{"goal": "Review on the default route"}])["error"].startswith(
         "Cannot resolve delegation provider 'unconfigured'")
 
 
-def test_fully_routed_call_does_not_resolve_the_default_route(monkeypatch, tmp_path):
-    harness = Harness(monkeypatch, tmp_path, {
-        "routes": [OPUS], "provider": "unconfigured-provider", "oneshot_max_children": 10,
-    })
+def test_fully_routed_call_does_not_resolve_the_default_route(tmp_path):
+    harness = Harness(tmp_path, {"routes": [OPUS], "provider": "unconfigured-provider"})
     result = harness.call([{"goal": "Review with opus", "route": OPUS}])
 
     assert result["results"][0]["status"] == "completed"
     assert harness.resolved == ["anthropic"]
 
 
-def test_revoked_route_is_refused_on_the_next_call(monkeypatch, tmp_path):
-    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+def test_revoked_route_is_refused_on_the_next_call(tmp_path):
+    harness = Harness(tmp_path, {"routes": [OPUS, ASTRA]})
     assert harness.call([{"goal": "Review with opus", "route": OPUS}])["results"][0]["status"] == "completed"
 
     harness.config["routes"] = [ASTRA]

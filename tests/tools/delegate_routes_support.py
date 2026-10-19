@@ -21,7 +21,7 @@ RUNTIMES = {
 PARENT_CHAIN = [{"provider": "deepseek", "model": "deepseek-chat"}]
 
 
-def parent_agent():
+def parent_agent(**attrs):
     parent = MagicMock()
     parent._delegate_depth = 1
     parent._active_children = []
@@ -47,6 +47,8 @@ def parent_agent():
     parent._print_fn = None
     parent.tool_progress_callback = None
     parent.thinking_callback = None
+    for name, value in attrs.items():
+        setattr(parent, name, value)
     return parent
 
 
@@ -63,11 +65,10 @@ def child_agent(**kwargs):
 
 
 class Harness:
-    def __init__(self, monkeypatch, tmp_path, config, runtimes=RUNTIMES):
-        self.config = {"max_spawn_depth": 3, **config}
+    def __init__(self, tmp_path, config, runtimes=RUNTIMES):
+        self.config = {"max_spawn_depth": 3, "oneshot_max_children": 10, **config}
         self.resolved: list[str] = []
         self.parent = parent_agent()
-        self._monkeypatch = monkeypatch
         self._tmp_path = tmp_path
         self._runtimes = runtimes
 

@@ -61,6 +61,7 @@ class _SlowUnwindingChild:
 
 def test_timeout_does_not_close_child_while_worker_is_unwinding(monkeypatch):
     child = _SlowUnwindingChild()
+    child._delegate_route = "anthropic/test-model@high"
     parent = SimpleNamespace(
         session_id="parent-timeout-test",
         _current_task_id=None,
@@ -89,6 +90,7 @@ def test_timeout_does_not_close_child_while_worker_is_unwinding(monkeypatch):
     )
 
     assert result["status"] == "timeout"
+    assert (result["model"], result["route"]) == ("test-model", "anthropic/test-model@high")
     assert child.unwinding.wait(timeout=10)
     try:
         assert not child.closed.is_set(), (
