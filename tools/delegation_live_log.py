@@ -242,7 +242,7 @@ def create_live_transcripts(
     ``(None, [None]*n, [])`` so delegation proceeds untouched.
 
     ``identities[i]`` is task i's ``{model, provider, route}``; the manifest records it per task, and at the top
-    level only when every task shares it.
+    level only when every task shares it (the top-level model is recomputed as tasks complete).
 
     ``home`` pins every transcript and the manifest to one explicit profile
     home instead of an ambient resolve that raw thread boundaries can strip
@@ -281,12 +281,14 @@ def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]], paths: 
                     identities: Optional[list[dict[str, Optional[str]]]] = None,
                     home: Optional[Path] = None) -> None:
     identities = identities or []
+    routes = {i.get("route") for i in identities}  # None is the default route, a value tasks share or not
     with _best_effort("manifest write"):
         _dump_json(_manifest_path(delegation_id, home), {
             "delegation_id": delegation_id, "started": time.strftime(_TIME_FMT),
             "task_count": len(task_list),
             "model": shared_value(i.get("model") for i in identities),
             "provider": shared_value(i.get("provider") for i in identities),
+            "route": routes.pop() if len(routes) == 1 else None,
             "tasks": [{
                 "index": i,
                 # Same mounted dir as the .log files, so the goal needs the same redaction.
@@ -314,9 +316,8 @@ def update_manifest_statuses(delegation_id: Optional[str],
                     task["exit_reason"] = r["exit_reason"]
                 if r.get("model"):
                     task["model"] = r["model"]
-        # The dispatch-time model is unknown when children inherit the parent's; a mixed call has none at all.
-        if not manifest.get("model"):
-            manifest["model"] = shared_value(t.get("model") for t in manifest.get("tasks", []))
+        # Recomputed every time: a child's fallback chain can move it off the model it was dispatched on.
+        manifest["model"] = shared_value(t.get("model") for t in manifest.get("tasks", []))
         manifest["completed"] = time.strftime(_TIME_FMT)
         _dump_json(mp, manifest)
 
