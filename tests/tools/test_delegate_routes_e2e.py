@@ -89,3 +89,37 @@ def test_each_route_gets_its_own_providers_endpoint_and_key_never_the_delegation
     assert (lab_b["base_url"], lab_b["api_key"], lab_b["model"]) == ("https://lab-b.invalid/v1", "sk-lab-b", "model-b")
     assert lab_a["requested_provider"] == "custom:lab-a" and lab_b["requested_provider"] == "custom:lab-b"
     assert (unrouted["base_url"], unrouted["api_key"]) == ("https://delegation.invalid/v1", "sk-delegation")
+
+
+def _run_routed(tasks, parent, tmp_path):
+    with (
+        patch.object(delegate_tool, "_resolve_workspace_hint", return_value=str(tmp_path)),
+        patch("run_agent.AIAgent", side_effect=_child) as agent_class,
+    ):
+        result = json.loads(registry.get_entry("delegate_task").handler({"tasks": tasks}, parent_agent=parent))
+    assert [r["status"] for r in result["results"]] == ["completed"] * len(tasks)
+    return [c.kwargs for c in agent_class.call_args_list]
+
+
+def test_openrouter_route_never_takes_the_parents_persisted_wire(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_IGNORE_USER_CONFIG", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-dummy")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    (get_hermes_home() / "config.yaml").write_text("""\
+model:
+  provider: anthropic
+  default: claude-opus-5-5
+  api_mode: anthropic_messages
+delegation:
+  max_spawn_depth: 3
+  routes:
+    - openrouter/qwen/qwen3-coder
+""", encoding="utf-8")
+    parent = _parent()
+    parent.provider, parent.requested_provider, parent.api_mode = "anthropic", "anthropic", "anthropic_messages"
+
+    (child,) = _run_routed([{"goal": "Review with qwen", "route": "openrouter/qwen/qwen3-coder"}], parent, tmp_path)
+
+    assert (child["provider"], child["model"], child["base_url"]) == (
+        "openrouter", "qwen/qwen3-coder", "https://openrouter.ai/api/v1")
+    assert child["api_mode"] == "chat_completions"  # OpenRouter's wire, not the parent's anthropic_messages
