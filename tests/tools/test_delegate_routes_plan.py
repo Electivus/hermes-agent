@@ -1,100 +1,9 @@
 """Per-task routes: every route is resolved before any child exists, and each child runs on its own route."""
 
-import json
-import threading
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from tools import delegate_tool
+from tests.tools.delegate_routes_support import ASTRA, GROK, OPUS, RUNTIMES, Harness
 from tools.delegation_live_log import live_transcript_root
-from tools.registry import registry
-
-OPUS = "anthropic/claude-opus-5-5@xhigh"
-ASTRA = "openai-codex/gpt-6-astra@high"
-GROK = "xai-oauth/grok-4.7"
-RUNTIMES = {
-    "anthropic": {"provider": "anthropic", "api_mode": "anthropic_messages", "base_url": "https://anthropic.invalid",
-                  "api_key": "sk-anthropic", "request_overrides": {"anthropic_beta": "route-own"}},
-    "openai-codex": {"provider": "openai-codex", "api_mode": "codex_responses", "base_url": "https://codex.invalid",
-                     "api_key": "sk-codex"},
-    "xai-oauth": {"provider": "xai-oauth", "api_mode": "codex_responses", "base_url": "https://xai.invalid",
-                  "api_key": "sk-xai"},
-    # Same provider as the parent, and the runtime leaves the wire unset.
-    "openrouter": {"provider": "openrouter", "api_mode": None, "base_url": "https://openrouter.invalid/v1",
-                   "api_key": "sk-openrouter"},
-}
-PARENT_CHAIN = [{"provider": "deepseek", "model": "deepseek-chat"}]
-
-
-def _parent():
-    parent = MagicMock()
-    parent._delegate_depth = 1  # depth > 0 runs the batch synchronously through the registry handler
-    parent._active_children = []
-    parent._active_children_lock = threading.Lock()
-    parent._session_db = None
-    parent._credential_pool = None
-    parent._client_kwargs = {}
-    parent.client = None
-    parent._fallback_chain = list(PARENT_CHAIN)
-    parent._oneshot_children_spawned = 0
-    parent.enabled_toolsets = ["terminal", "file"]
-    parent.disabled_toolsets = []
-    parent.request_overrides = {"parent": "overrides"}
-    parent.capabilities = {"vision": True}
-    parent.provider = "openrouter"
-    parent.requested_provider = "openrouter"
-    parent.base_url = "https://parent.invalid/v1"
-    parent.api_key = "sk-parent"
-    parent.api_mode = "codex_responses"
-    parent.model = "parent/model"
-    parent.reasoning_config = {"enabled": True, "effort": "medium"}
-    parent.platform = "cli"
-    parent._print_fn = None
-    parent.tool_progress_callback = None
-    parent.thinking_callback = None
-    return parent
-
-
-def _child(**kwargs):
-    child = MagicMock()
-    child._credential_pool = None
-    child._delegate_saved_tool_names = []
-    child.session_prompt_tokens = 0
-    child.session_completion_tokens = 0
-    child.model = kwargs["model"]
-    child.provider = kwargs["provider"]
-    child.run_conversation.return_value = {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
-    return child
-
-
-class _Harness:
-    def __init__(self, monkeypatch, tmp_path, config, runtimes=RUNTIMES):
-        self.config = {"max_spawn_depth": 3, **config}
-        self.resolved: list[str] = []
-        self.parent = _parent()
-        self._monkeypatch = monkeypatch
-        self._tmp_path = tmp_path
-        self._runtimes = runtimes
-
-    def _resolve(self, requested=None, target_model=None, **_kw):
-        self.resolved.append(requested)
-        runtime = self._runtimes[requested]
-        if isinstance(runtime, Exception):
-            raise runtime
-        return dict(runtime)
-
-    def call(self, tasks):
-        with (
-            patch.object(delegate_tool, "_load_config", side_effect=lambda: self.config),
-            patch.object(delegate_tool, "_resolve_workspace_hint", return_value=str(self._tmp_path)),
-            patch("hermes_cli.runtime_provider.resolve_runtime_provider", side_effect=self._resolve),
-            patch("agent.oneshot_footprint.is_single_query_session", return_value=True),
-            patch("run_agent.AIAgent", side_effect=_child) as agent_class,
-        ):
-            result = json.loads(registry.get_entry("delegate_task").handler({"tasks": tasks}, parent_agent=self.parent))
-        self.built = [c.kwargs for c in agent_class.call_args_list]
-        return result
 
 
 def _assert_nothing_happened(harness, result):
@@ -106,7 +15,7 @@ def _assert_nothing_happened(harness, result):
 
 
 def test_mixed_batch_builds_each_child_on_its_own_route(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
     result = harness.call([
         {"goal": "Review with opus", "route": OPUS},
         {"goal": "Review with astra", "route": ASTRA},
@@ -133,7 +42,7 @@ def test_mixed_batch_builds_each_child_on_its_own_route(monkeypatch, tmp_path):
 
 def test_route_child_never_inherits_delegation_endpoint_overrides_or_fallback(monkeypatch, tmp_path):
     delegation_chain = [{"provider": "zai", "model": "glm-5"}]
-    harness = _Harness(monkeypatch, tmp_path, {
+    harness = Harness(monkeypatch, tmp_path, {
         "routes": [OPUS], "base_url": "https://delegation.invalid/v1", "api_key": "sk-delegation",
         "api_mode": "chat_completions", "request_overrides": {"service_tier": "flex"},
         "fallback_providers": delegation_chain, "oneshot_max_children": 10,
@@ -151,7 +60,7 @@ def test_route_child_never_inherits_delegation_endpoint_overrides_or_fallback(mo
 
 
 def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [ASTRA], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [ASTRA], "oneshot_max_children": 10})
     harness.call([{
         "goal": "Review with astra", "route": ASTRA, "provider": "openrouter", "model": "attacker/model",
         "base_url": "https://attacker.invalid", "api_key": "sk-attacker", "api_mode": "chat_completions",
@@ -166,7 +75,7 @@ def test_task_fields_cannot_supply_endpoint_key_or_transport(monkeypatch, tmp_pa
 
 def test_same_provider_route_derives_its_own_wire_instead_of_the_parents(monkeypatch, tmp_path):
     route = "openrouter/qwen/qwen3-coder"
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [route], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [route], "oneshot_max_children": 10})
     harness.call([{"goal": "Review with qwen", "route": route}])
 
     (child,) = harness.built
@@ -186,7 +95,7 @@ def test_same_provider_route_derives_its_own_wire_instead_of_the_parents(monkeyp
 def test_route_effort_beats_delegation_effort_which_beats_the_parent(
     monkeypatch, tmp_path, delegation_effort, route, expected,
 ):
-    harness = _Harness(monkeypatch, tmp_path, {
+    harness = Harness(monkeypatch, tmp_path, {
         "routes": [route], "reasoning_effort": delegation_effort, "oneshot_max_children": 10,
     })
     harness.call([{"goal": "Review with opus", "route": route}])
@@ -205,7 +114,7 @@ def test_route_effort_beats_delegation_effort_which_beats_the_parent(
     ],
 )
 def test_unusable_route_refuses_the_call_before_any_side_effect(monkeypatch, tmp_path, routes, task_route, expected):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": routes, "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": routes, "oneshot_max_children": 10})
     result = harness.call([{"goal": "Review the module", "route": task_route}])
 
     _assert_nothing_happened(harness, result)
@@ -215,7 +124,7 @@ def test_unusable_route_refuses_the_call_before_any_side_effect(monkeypatch, tmp
 
 
 def test_every_failing_task_is_named_in_one_error(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
     result = harness.call([
         {"goal": "Review with a typo", "route": "anthropic/claude-opus-5-5@max"},
         {"goal": "Review with astra", "route": ASTRA},
@@ -230,7 +139,7 @@ def test_every_failing_task_is_named_in_one_error(monkeypatch, tmp_path):
 
 def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_path):
     runtimes = {**RUNTIMES, "xai-oauth": RuntimeError("xai-oauth is not logged in")}
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [OPUS, GROK], "oneshot_max_children": 10}, runtimes)
+    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, GROK], "oneshot_max_children": 10}, runtimes)
     result = harness.call([
         {"goal": "Review with opus", "route": OPUS},
         {"goal": "Review with grok", "route": GROK},
@@ -244,7 +153,7 @@ def test_resolution_failure_on_a_later_route_builds_nothing(monkeypatch, tmp_pat
 
 
 def test_fully_routed_call_does_not_resolve_the_default_route(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {
+    harness = Harness(monkeypatch, tmp_path, {
         "routes": [OPUS], "provider": "unconfigured-provider", "oneshot_max_children": 10,
     })
     result = harness.call([{"goal": "Review with opus", "route": OPUS}])
@@ -254,7 +163,7 @@ def test_fully_routed_call_does_not_resolve_the_default_route(monkeypatch, tmp_p
 
 
 def test_revoked_route_is_refused_on_the_next_call(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
     assert harness.call([{"goal": "Review with opus", "route": OPUS}])["results"][0]["status"] == "completed"
 
     harness.config["routes"] = [ASTRA]

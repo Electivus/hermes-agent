@@ -41,10 +41,10 @@ def register(ctx):
 @pytest.mark.platforms("any")
 def test_host_isolated_plugin_reads_routes_through_the_remote_facade(tmp_path, monkeypatch):
     from hermes_cli.plugins import PluginManager
-    from tests.hermes_cli.test_plugin_host import _home_with_plugins
+    from tests.hermes_cli.plugin_host_support import home_with_plugins
     from tools.registry import registry
 
-    home = _home_with_plugins(tmp_path, monkeypatch, {"hostroutes": ROUTES_PLUGIN})
+    home = home_with_plugins(tmp_path, monkeypatch, {"hostroutes": ROUTES_PLUGIN})
     _write_config(home, {"plugins": {"enabled": ["hostroutes"], "isolation": "host"},
                          "delegation": {"routes": [OPUS, ASTRA]}})
     manager = PluginManager()

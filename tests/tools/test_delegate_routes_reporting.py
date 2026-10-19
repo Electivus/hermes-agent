@@ -11,7 +11,7 @@ from tools.delegate_tool_child_run import _fabricated_entry
 from tools.delegate_tool_dispatch import _Batch, _dispatch_unit
 from tools.delegation_live_log import live_transcript_root
 from tools.process_registry_notifications import format_process_notification
-from tests.tools.test_delegate_routes_plan import ASTRA, OPUS, _Harness
+from tests.tools.delegate_routes_support import ASTRA, OPUS, Harness
 
 REJECTED = "HTTP 400: claude-opus-5-5 is not a valid model ID"
 
@@ -119,7 +119,7 @@ def test_timeout_entry_carries_model_and_route(monkeypatch):
 
 
 def test_routed_results_progress_and_manifest_name_each_childs_own_route(monkeypatch, tmp_path):
-    harness = _Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
+    harness = Harness(monkeypatch, tmp_path, {"routes": [OPUS, ASTRA], "oneshot_max_children": 10})
     events = []
     harness.parent.tool_progress_callback = lambda event, *_a, **kw: events.append((event, kw))
     result = harness.call([
