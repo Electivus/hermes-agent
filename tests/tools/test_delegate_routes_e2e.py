@@ -123,3 +123,24 @@ delegation:
     assert (child["provider"], child["model"], child["base_url"]) == (
         "openrouter", "qwen/qwen3-coder", "https://openrouter.ai/api/v1")
     assert child["api_mode"] == "chat_completions"  # OpenRouter's wire, not the parent's anthropic_messages
+
+
+def test_named_route_resolves_its_provider_under_an_auto_config_with_a_local_endpoint(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_IGNORE_USER_CONFIG", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dummy")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-dummy")
+    (get_hermes_home() / "config.yaml").write_text("""\
+model:
+  provider: auto
+  base_url: http://localhost:11434
+  default: llama3
+delegation:
+  max_spawn_depth: 3
+  routes:
+    - anthropic/claude-opus-5-5
+""", encoding="utf-8")
+
+    (child,) = _run_routed([{"goal": "Review with opus", "route": "anthropic/claude-opus-5-5"}], _parent(), tmp_path)
+
+    assert (child["provider"], child["model"]) == ("anthropic", "claude-opus-5-5")
+    assert child["base_url"].rstrip("/") == "https://api.anthropic.com"

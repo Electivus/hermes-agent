@@ -1,5 +1,5 @@
 """The persisted ``model`` block belongs to the provider it names: a request for another provider never takes its
-api_mode. Real resolver against a temp HERMES_HOME config."""
+api_mode or its local-endpoint shortcut. Real resolver against a temp HERMES_HOME config."""
 
 import pytest
 
@@ -30,3 +30,21 @@ def test_persisted_api_mode_applies_only_where_the_config_recorded_it(monkeypatc
     runtime = resolve_runtime_provider(requested=requested, target_model="qwen/qwen3-coder")
 
     assert (runtime["provider"], runtime["base_url"], runtime["api_mode"]) == expected
+
+
+@pytest.mark.parametrize(
+    ("requested", "base_url"),
+    [("anthropic", "https://api.anthropic.com"), (None, "http://localhost:11434")],
+    ids=["a-named-provider", "the-configs-auto-request"],
+)
+def test_local_endpoint_shortcut_serves_only_an_auto_request(monkeypatch, requested, base_url):
+    """#3846: provider auto + a local base_url keeps an env cloud key off the local endpoint; it never turns a request
+    for a named provider into an OpenRouter one."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dummy")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-dummy")
+    _write_config(monkeypatch, "model:\n  provider: auto\n  base_url: http://localhost:11434\n  default: some-model\n")
+
+    runtime = resolve_runtime_provider(requested=requested, target_model="claude-opus-5-5")
+
+    assert runtime["base_url"].rstrip("/") == base_url
+    assert requested is None or runtime["provider"] == requested

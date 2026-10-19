@@ -1002,13 +1002,15 @@ def _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_
 
 
 def _local_endpoint_bypass(requested_provider: str, explicit_api_key, explicit_base_url) -> Optional[dict[str, Any]]:
-    """provider "auto"/unset with a config base_url at a custom/local endpoint routes through the
-    OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
-    and send the request to a cloud API. Only non-cloud roots take the bypass; match on HOST, not
-    substring, so a look-alike (api.anthropic.com.attacker.test) cannot leak a cloud credential."""
+    """An "auto" request under a config whose provider is "auto"/unset and whose base_url is a custom/local endpoint
+    routes through the OpenAI-compatible resolver, so resolve_provider() cannot pick up an env ANTHROPIC/OPENAI key
+    and send the request to a cloud API. A request that names a provider (a route, ``--provider``,
+    ``delegation.provider``) is not that config's endpoint and resolves on its own rung. Only non-cloud roots take
+    the bypass; match on HOST, not substring, so a look-alike (api.anthropic.com.attacker.test) cannot leak a cloud
+    credential."""
     model_cfg = _get_model_config()
     cfg_base_url = str(model_cfg.get("base_url") or "").strip()
-    if (not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")
+    if (requested_provider not in ("auto", "") or not cfg_base_url or _cfg_provider(model_cfg) not in ("auto", "")
             or any(base_url_host_matches(cfg_base_url, host) for host in _LOCAL_BYPASS_CLOUD_HOSTS)):
         return None
     return _openrouter_fallback(requested_provider, explicit_api_key, explicit_base_url)
@@ -1045,7 +1047,7 @@ def resolve_runtime_provider(*, requested: Optional[str] = None, explicit_api_ke
       1. disabled-provider guard (``providers.<name>.enabled: false``)
       2. requested-name shortcuts: moa, anthropic@azure, azure-foundry, vertex
       3. named custom provider / llamacpp alias / bare-custom direct alias
-      4. local-endpoint bypass (no explicit creds, config base_url at a non-cloud host)
+      4. local-endpoint bypass (an "auto" request, no explicit creds, config base_url at a non-cloud host)
       5. ``auth.resolve_provider`` → explicit --api-key/--base-url path
       6. credential pool (OpenRouter pool only without custom endpoint/override)
       7. OAuth specs (nous/codex/xai/qwen; "auto" swallows AuthError, logs, and stamps it on a
