@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
 
@@ -157,17 +157,6 @@ class ChildRoute:
             "provider": provider if isinstance(provider, str) else None,
             "route": self.route_id,
         }
-
-
-MIXED_MODEL_LABEL = "mixed"
-
-
-def unit_model_label(models: Iterable[Optional[str]]) -> Optional[str]:
-    """The model a completion unit reports: the children's shared model, ``"mixed"``, or None when none is known."""
-    distinct = set(filter(None, models))
-    if len(distinct) > 1:
-        return MIXED_MODEL_LABEL
-    return next(iter(distinct), None)
 
 
 def default_child_route(routing_cfg: Mapping[str, Any], parent_agent: Any) -> ChildRoute:

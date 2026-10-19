@@ -271,8 +271,8 @@ def _manifest_path(delegation_id: str, home: Optional[Path] = None) -> Path:
     return live_transcript_root(home) / delegation_id / "manifest.json"
 
 
-def _uniform(values) -> Optional[str]:
-    """The one value every task shares, or None (unknown, or the tasks differ)."""
+def shared_value(values) -> Optional[str]:
+    """The one value every item that has one shares, else None (none known, or they differ)."""
     distinct = set(filter(None, values))
     return distinct.pop() if len(distinct) == 1 else None
 
@@ -285,8 +285,8 @@ def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]], paths: 
         _dump_json(_manifest_path(delegation_id, home), {
             "delegation_id": delegation_id, "started": time.strftime(_TIME_FMT),
             "task_count": len(task_list),
-            "model": _uniform(i.get("model") for i in identities),
-            "provider": _uniform(i.get("provider") for i in identities),
+            "model": shared_value(i.get("model") for i in identities),
+            "provider": shared_value(i.get("provider") for i in identities),
             "tasks": [{
                 "index": i,
                 # Same mounted dir as the .log files, so the goal needs the same redaction.
@@ -316,7 +316,7 @@ def update_manifest_statuses(delegation_id: Optional[str],
                     task["model"] = r["model"]
         # The dispatch-time model is unknown when children inherit the parent's; a mixed call has none at all.
         if not manifest.get("model"):
-            manifest["model"] = _uniform(t.get("model") for t in manifest.get("tasks", []))
+            manifest["model"] = shared_value(t.get("model") for t in manifest.get("tasks", []))
         manifest["completed"] = time.strftime(_TIME_FMT)
         _dump_json(mp, manifest)
 

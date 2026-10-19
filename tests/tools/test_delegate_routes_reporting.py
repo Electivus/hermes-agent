@@ -57,6 +57,29 @@ def test_mixed_unit_completion_says_mixed_and_names_each_childs_model(monkeypatc
     assert "model=" not in uniform
 
 
+def test_background_completion_names_each_tasks_route_and_any_differing_model():
+    high, xhigh = "anthropic/claude-opus-5-5@high", "anthropic/claude-opus-5-5@xhigh"
+    same_model = format_process_notification(_completion("claude-opus-5-5", [
+        _result(0, "claude-opus-5-5", route=high), _result(1, "claude-opus-5-5", route=xhigh),
+    ]))
+    assert f"TASK 1/2: task 0  (status=completed, route={high}" in same_model
+    assert f"TASK 2/2: task 1  (status=completed, route={xhigh}" in same_model
+
+    # The record was written before a child's fallback moved it to another model; the results say what ran.
+    fell_back = format_process_notification(_completion("claude-opus-5-5", [
+        _result(0, "claude-opus-5-5"), _result(1, "deepseek-chat"),
+    ]))
+    assert "TASK 1/2: task 0  (status=completed, model=claude-opus-5-5" in fell_back
+    assert "TASK 2/2: task 1  (status=completed, model=deepseek-chat" in fell_back
+
+
+def test_early_task_failure_notice_names_the_childs_model_and_route():
+    failed = _result(1, "gpt-6-astra", route=ASTRA, status="error", summary=None, error="boom")
+    text = format_process_notification({**_completion("mixed", [failed]), "task_failure_notice": True, "n_tasks": 2})
+    assert "task 2/2" in text
+    assert "Model: gpt-6-astra" in text and f"Route: {ASTRA}" in text
+
+
 def test_fabricated_entries_carry_model_and_route():
     routed = SimpleNamespace(model="claude-opus-5-5", _delegate_route=OPUS, _delegate_role="leaf")
     unrouted = SimpleNamespace(model="parent/model", _delegate_route=None, _delegate_role="leaf")

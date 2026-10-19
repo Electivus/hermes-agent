@@ -7,8 +7,6 @@ import time
 from dataclasses import dataclass
 from contextlib import suppress
 
-from tools.delegate_tool_routes import MIXED_MODEL_LABEL, load_route_catalog
-
 _DONE = ("completed", "success")
 _REASON_STATUS = {"lost": "marked lost because the process backend disappeared", "failed_start": "failed to start"}
 
@@ -128,6 +126,7 @@ def _delegation_model_not_found(results, config) -> bool:
 
 def _route_model_rejected_lines(results, config) -> list[str]:
     """One line per route (still in the live delegation.routes) whose model its provider rejected."""
+    from tools.delegate_tool_routes import load_route_catalog
     catalog = load_route_catalog(config)
     lines = []
     for route_id in dict.fromkeys(r["route"] for r in results if r.get("route")):
@@ -208,7 +207,9 @@ def _format_task_failure_notice(evt: dict, deleg_id: str) -> str:
         "The batch's consolidated results will still arrive when the last sibling finishes; this is an early "
         "warning so you can re-dispatch or investigate now instead of then.",
         f"Task: {goal}" if goal else "",
-        f"Status: {r.get('status', '?')}   Duration: {r.get('duration_seconds', '?')}s" + (f"\nError: {err}" if err else ""),
+        f"Status: {r.get('status', '?')}   Duration: {r.get('duration_seconds', '?')}s"
+        + (f"   Model: {r['model']}" if r.get("model") else "") + (f"   Route: {r['route']}" if r.get("route") else "")
+        + (f"\nError: {err}" if err else ""),
     ]
     if r.get("live_transcript"):
         lines.append(f"Live transcript: {r['live_transcript']}")
@@ -255,15 +256,16 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
     # Config-level rejection notice BEFORE the per-task wall — a rejected
     # delegation model fails every task identically and must not stay buried.
     lines += _notice_lines(results)
-    # A mixed unit's preamble says "Model: mixed", so each task names its own.
-    mixed = evt.get("model") == MIXED_MODEL_LABEL
+    # The record's model is written at dispatch; a child's fallback can still move it, so the results decide.
+    models_differ = len(set(filter(None, (r.get("model") for r in results)))) > 1
     for r in sorted(results, key=lambda x: x.get("task_index", 0)):
         idx, r_truncated = r.get("task_index", 0), _is_truncated(r)
         r_status, r_summary, r_error = r.get("status", "?"), r.get("summary"), r.get("error")
         r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
         icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
-                  + (f", model={r['model']}" if mixed and r.get("model") else "")
+                  + (f", model={r['model']}" if models_differ and r.get("model") else "")
+                  + (f", route={r['route']}" if r.get("route") else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))
