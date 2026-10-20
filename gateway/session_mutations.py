@@ -56,7 +56,13 @@ def _authorize_control(authority, actor, ref, params, owner=None):
                 require_history_claim(authority, conn, actor, ref.session_id)
                 cold_history = authorize_history(conn, actor, ref.session_id)
         if not cold_history:
-            authority.authorize(actor, ref, 'session:control')
+            if params.get('operation') == 'delete':
+                # The read gate mounts a cold row first, so the check below sees what it is.
+                authority.authorize(actor, ref, 'session:read')
+            if not (params.get('operation') == 'delete' and authority.sessions[ref.session_id].superseded):
+                # An old conversation its chat moved past is read-only, but deleting it retires its
+                # own lineage only (retirement never evicts a read-only mount's route).
+                authority.authorize(actor, ref, 'session:control')
     return cold_history
 
 
@@ -71,13 +77,18 @@ def _owner_ref(authority, ref, params):
     A transcript- or policy-changing operation (rewind, reset, compress, a policy pick) keeps the
     listed id: its busy gate, generation fence and eviction are keyed by the session it writes, so
     authorizing it on the owner while writing the segment would bypass the owner's FIFO. A segment
-    of a live owner therefore stays a named refusal for those, as on main."""
+    of a live owner therefore stays a named refusal for those, as on main. A delete of a messaging
+    conversation's later compression segment resolves to its lineage root, where its lane's
+    session lives (``messaging_owner_ref``, as resume does)."""
     if params.get('operation') not in _OWNER_AUTHORIZED:
         return ref
     from gateway.session_contract import SessionRef
     from hermes_state_local import local_lineage_owner
     with authority.db._read_ctx() as conn:
         owner = local_lineage_owner(conn, ref.session_id)
+    if owner == ref.session_id and params.get('operation') == 'delete':
+        from gateway.session_route_recovery import messaging_owner_ref
+        return messaging_owner_ref(authority, ref)
     return ref if owner == ref.session_id else SessionRef(ref.profile_id, owner)
 
 
@@ -275,6 +286,17 @@ async def _project_result(authority, ref, live, params, result, editor_servers, 
             from gateway.session_local_mcp import retire_editor_mcp
             await asyncio.to_thread(retire_editor_mcp, authority, ref.session_id)
     if operation not in {*_POLICY, 'reset', 'compress', 'rewind'} or owns_projection:
+        if operation == 'workspace':
+            # Main's move drops the terminal environment so the next command starts in the new folder: the
+            # route-keyed one a turn built and the cwd its commands recorded, which would win over the move.
+            # Off-loop (a remote teardown takes seconds) and before the policy publishes and the queue runs,
+            # so no turn starts on the old environment.
+            from gateway.session_policy_refresh import drop_session_terminal
+            try:
+                await asyncio.to_thread(drop_session_terminal, authority, ref)
+            except Exception:  # health: allow BLE001 -- the move is committed: it must still publish
+                logger.warning('Session %s moved without dropping its terminal environment', ref.session_id,
+                               exc_info=True)
         _project_committed(authority, ref, operation, result)
     if live is not None:
         if operation == 'rewind' and owns_projection:
@@ -306,12 +328,6 @@ def _project_committed(authority, ref, operation, result):
         from gateway.session_local import local_session_info
         authority.sessions[ref.session_id].event_stream.publish(
             ref.session_id, local_session_info(authority, ref), event_type='session.info')
-    if operation == 'workspace':
-        # Main's move drops the terminal environment so the next command starts in the new folder.
-        from hermes_state_local import local_receipt
-        from tools.terminal_tool_lifecycle import cleanup_vm
-        for sid in {ref.session_id, local_receipt(authority.db, ref.session_id)['entry']['session_id']}:
-            cleanup_vm(sid)
     if operation == 'branch':
         from gateway.session_local_recovery import restore_local_session
         restore_local_session(authority, result['branched_session_id'])
