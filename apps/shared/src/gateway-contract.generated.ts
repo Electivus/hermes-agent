@@ -678,6 +678,7 @@ export interface FreeTierStatusResult {
   retry_after?: number | null
   challenge?: FreeTierChallengePayload | null
   nudge_due_in?: number | null
+  connector_nudge_due_in?: number | null
 }
 /** ``hermes_cli/anon_challenge.py::BrowserChallenge.as_payload``: the ``free_tier.challenge`` event, and ``free_tier.status``'s ``challenge`` field for a client that connected after it. */
 export interface FreeTierChallengePayload {
@@ -708,6 +709,10 @@ export interface FreeTierProvisionResult {
 }
 export interface FreeTierAckNoticeResult {
   acked: boolean
+}
+export interface FreeTierClaimNudgeParams {
+  profile?: string | null
+  kind?: 'trial' | 'connector'
 }
 export interface FreeTierClaimNudgeResult {
   claimed: boolean
@@ -1887,43 +1892,6 @@ export interface BotRelayReplyParams {
   reply?: string | null
   error?: string | null
   reason?: string | null
-}
-export interface BrowserControllerRegisterParams {
-  session_id: string
-  controller_id: string
-  browser_profile_id: string
-  capabilities?: string[] | null
-  protocol_version?: unknown | null
-  principal_id?: string | null
-}
-export interface BrowserControllerRegisterResult {
-  scope: ControllerScope
-}
-export interface ControllerScope {
-  principal_id: string
-  profile_id: string
-  session_id: string
-  controller_id: string
-  browser_profile_id: string
-  transport_family: string
-  capabilities: string[]
-}
-export interface BrowserControllerResultParams {
-  session_id: string
-  command_id: string
-  ok?: unknown | null
-  result?: unknown | null
-  error?: unknown | null
-}
-export interface BrowserControllerResultResult {
-  accepted: boolean
-}
-/** Every controller call names the session the controller is attached to. */
-export interface BrowserControllerParams {
-  session_id: string
-}
-export interface BrowserControllerDetachResult {
-  detached?: boolean
 }
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
@@ -4023,16 +3991,14 @@ export interface CronRemovedJob {
 export interface BrowserManageParams {
   action?: BrowserAction
   url?: string | null
-  enabled?: boolean | null
   session_id?: string | null
   profile?: string | null
 }
-export type BrowserAction = 'status' | 'connect' | 'disconnect' | 'use'
+export type BrowserAction = 'status' | 'connect' | 'disconnect'
 export interface BrowserManageResult {
   connected: boolean
   url?: string | null
   messages?: string[] | null
-  browser_use?: boolean | null
 }
 /** Handlers that look a live session up with ``_sessions.get(params.get("session_id"))``: an absent / unknown id falls back to the launch profile's config, so it is never required. */
 export interface _SessionScoped {
@@ -4667,7 +4633,6 @@ export interface CanonicalSessionInfo {
   enabled_toolsets?: string[] | null
   tool_availability?: Record<string, unknown> | null
   tool_availability_warnings?: string[] | null
-  browser_backend_notice?: string | null
   unknown_toolsets?: string[] | null
   source: string
   model?: string | null
@@ -5053,7 +5018,6 @@ export interface CanonicalSnapshotInfo {
   enabled_toolsets?: string[] | null
   tool_availability?: Record<string, unknown> | null
   tool_availability_warnings?: string[] | null
-  browser_backend_notice?: string | null
   unknown_toolsets?: string[] | null
   desktop_protocol: 'hermes-gateway-v1'
   source?: string | null
@@ -5983,20 +5947,6 @@ export interface BrowserProgressPayload {
   message: string
   level: string
 }
-/** ``gateway/browser_control_broker.py`` FRAME_COMMAND params. */
-export interface BrowserControllerCommandPayload {
-  command_id: string
-  action: string
-  arguments: Record<string, unknown>
-  controller_id?: string | null
-  browser_profile_id?: string | null
-  tool_call_id?: string | null
-}
-/** ``gateway/browser_control_broker.py::_cancel_frame``. */
-export interface BrowserControllerCancelPayload {
-  command_id: string
-  tool_call_id?: string | null
-}
 /** ``methods_voice._vr_on_status``; states come from the recorder (idle / listening / transcribing …). */
 export interface VoiceStatusPayload {
   state: string
@@ -6078,15 +6028,7 @@ export interface RpcMethods {
   'bot_relay.reply': { params: BotRelayReplyParams; result: OkResult }
   /** Replace this gateway's view of agents on other connections; answers the accepted row count. */
   'bot_relay.roster.sync': { params: BotRelayRosterSyncParams; result: BotRelayRosterSyncResult }
-  /** Hard-detach only the controller owned by this authenticated transport. */
-  'browser.controller.detach': { params: BrowserControllerParams; result: BrowserControllerDetachResult }
-  /** Acknowledge a heartbeat only for this transport's own attached controller. */
-  'browser.controller.heartbeat': { params: BrowserControllerParams; result: OkResult }
-  /** Attach this connection as the browser controller for one session; fails closed (4403). */
-  'browser.controller.register': { params: BrowserControllerRegisterParams; result: BrowserControllerRegisterResult }
-  /** Deliver one command result to the broker; accepted is false for unknown or settled command ids. */
-  'browser.controller.result': { params: BrowserControllerResultParams; result: BrowserControllerResultResult }
-  /** Inspect, attach to, or drop the CDP browser the tools use, or switch Browser Use mode (``use``, applies to new sessions); ``messages`` narrate a connect. */
+  /** Inspect, attach to, or drop the CDP browser the tools use; ``messages`` narrate a connect. */
   'browser.manage': { params: BrowserManageParams; result: BrowserManageResult }
   /** Lock one answer of a batch clarify request (editable until every question is locked). */
   'clarify.lock': { params: ClarifyLockParams; result: ClarifyLockResult }
@@ -6169,7 +6111,7 @@ export interface RpcMethods {
   /** Report a browser window outcome for the matching pending attempt; mint remains authoritative. */
   'free_tier.challenge_result': { params: FreeTierChallengeResultParams; result: FreeTierChallengeResult }
   /** Claim the due sign-in offer; true for exactly one caller each time an offer comes due. */
-  'free_tier.claim_nudge': { params: ProfileParams; result: FreeTierClaimNudgeResult }
+  'free_tier.claim_nudge': { params: FreeTierClaimNudgeParams; result: FreeTierClaimNudgeResult }
   /** Explicit retry of the free-tier identity mint when the boot bootstrap could not create it. */
   'free_tier.provision': { params: ProfileParams; result: FreeTierProvisionResult }
   /** Pure read of the focused profile's free-tier identity state (no network, no side effects). */
@@ -6583,10 +6525,6 @@ export const RPC_METHODS = [
   'bot_relay.outbox.drain',
   'bot_relay.reply',
   'bot_relay.roster.sync',
-  'browser.controller.detach',
-  'browser.controller.heartbeat',
-  'browser.controller.register',
-  'browser.controller.result',
   'browser.manage',
   'clarify.lock',
   'cli.exec',
@@ -7031,10 +6969,6 @@ export interface BackendGatewayEventMap {
   'billing.step_up.verification': BillingStepUpVerificationPayload
   /** A bot-relay outbox envelope is queued; drain it. */
   'bot_relay.outbox.pending': ChangeSignalPayload
-  /** Withdraw a pending controller command. */
-  'browser.controller.cancel': BrowserControllerCancelPayload
-  /** Dispatch one browser action to the attached controller. */
-  'browser.controller.command': BrowserControllerCommandPayload
   /** Browser (CDP) connect / install progress line. */
   'browser.progress': BrowserProgressPayload
   /** A /btw side question was answered. */
@@ -7188,8 +7122,6 @@ export const GATEWAY_EVENT_TYPES = [
   'background.complete',
   'billing.step_up.verification',
   'bot_relay.outbox.pending',
-  'browser.controller.cancel',
-  'browser.controller.command',
   'browser.progress',
   'btw.complete',
   'connection.request',
