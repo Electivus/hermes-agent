@@ -117,12 +117,18 @@ def _rejects_model(model: str, results) -> bool:
     return any(model in text and any(p in text for p in patterns) for text in texts)
 
 
+def _route_id(result: dict) -> str:
+    """The ``delegation.routes`` id a task ran on; a backend-routed task's ``route`` is a dict and has none."""
+    route = result.get("route")
+    return route if isinstance(route, str) else ""
+
+
 def _route_model_rejected_lines(results) -> list[str]:
-    from tools.delegate_tool_routes import parse_route_id
+    from tools.delegate_tool_route_catalog import parse_route_id
     groups: dict[tuple[str, str], list[dict]] = {}
     for r in results:
-        if r.get("route"):
-            groups.setdefault((r["route"], r.get("model") or ""), []).append(r)
+        if route_id := _route_id(r):
+            groups.setdefault((route_id, r.get("model") or ""), []).append(r)
     return [
         f'⚠ SUBAGENT ROUTE MODEL REJECTED: route "{route_id}" (delegation.routes): provider '
         f'"{parse_route_id(route_id).provider}" rejected model "{model}". A route has no fallback chain; fix '
@@ -201,7 +207,7 @@ def _format_task_failure_notice(evt: dict, deleg_id: str) -> str:
         "warning so you can re-dispatch or investigate now instead of then.",
         f"Task: {goal}" if goal else "",
         f"Status: {r.get('status', '?')}   Duration: {r.get('duration_seconds', '?')}s"
-        + (f"   Model: {r['model']}" if r.get("model") else "") + (f"   Route: {r['route']}" if r.get("route") else "")
+        + (f"   Model: {r['model']}" if r.get("model") else "") + (f"   Route: {_route_id(r)}" if _route_id(r) else "")
         + (f"\nError: {err}" if err else ""),
     ]
     if r.get("live_transcript"):
@@ -256,7 +262,7 @@ def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> s
         icon = "⚠" if r_truncated else ("✓" if r_status in _DONE else "✗")
         header = (f"--- {icon} TASK {idx + 1}/{n}" + (f": {r_goal}" if r_goal else "") + f"  (status={r_status}"
                   + (f", model={r['model']}" if models_differ and r.get("model") else "")
-                  + (f", route={r['route']}" if r.get("route") else "")
+                  + (f", route={_route_id(r)}" if _route_id(r) else "")
                   + (f", api_calls={r['api_calls']}" if r.get("api_calls") else "")
                   + (f", {r['duration_seconds']}s" if r.get("duration_seconds") is not None else "")
                   + (", TRUNCATED: hit max_iterations — work may be incomplete" if r_truncated else ""))

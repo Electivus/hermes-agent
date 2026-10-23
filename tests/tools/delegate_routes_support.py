@@ -60,6 +60,10 @@ def child_agent(**kwargs):
     child.session_completion_tokens = 0
     child.model = kwargs["model"]
     child.provider = kwargs["provider"]
+    child.reasoning_config = kwargs["reasoning_config"]
+    child.service_tier = None
+    child.request_overrides = kwargs["request_overrides"]
+    child._fallback_activated = False
     child.run_conversation.return_value = {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
     return child
 

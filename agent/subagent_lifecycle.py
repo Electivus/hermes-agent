@@ -278,7 +278,7 @@ class SubagentLifecycleService:
         """Route ids ``delegate_task`` accepts right now: ``delegation.routes`` in operator order, malformed and
         repeated entries dropped. Needs no active parent."""
         from tools.delegate_tool_config import _load_config
-        from tools.delegate_tool_routes import load_route_catalog
+        from tools.delegate_tool_route_catalog import load_route_catalog
         return load_route_catalog(_load_config()).ids
 
     def launch(self, request: SubagentLaunchRequest | Mapping[str, Any]) -> SubagentHandle:
@@ -296,19 +296,21 @@ class SubagentLifecycleService:
             if request.correlation_id and correlation_key in _REGISTRY.correlations:
                 raise SubagentLifecycleError("Duplicate correlation_id for this parent session.")
         # Lazy: delegate construction stays internal, plugins never import private delegation helpers.
-        from tools.delegate_tool import _build_child_preserving_parent_tools, _load_config, DEFAULT_MAX_ITERATIONS
-        from tools.delegate_tool_routes import default_child_route
+        from tools.delegate_tool import (
+            _build_child_preserving_parent_tools, _credential_overrides, _load_config, _resolve_delegation_credentials,
+            DEFAULT_MAX_ITERATIONS,
+        )
         # Routing precedence: request.provider > delegation config > parent.
         routing_cfg = {"provider": request.provider, "model": request.model or ""} if request.provider is not None else _load_config()
         try:
-            child_kwargs = default_child_route(routing_cfg, parent).build_kwargs()
+            creds = _resolve_delegation_credentials(routing_cfg, parent)
         except ValueError as exc:
             raise SubagentLifecycleError(str(exc)) from exc
-        child_kwargs["model"] = request.model or child_kwargs["model"]
         child = _build_child_preserving_parent_tools(
             task_index=0, goal=request.goal, context=request.context,
             toolsets=list(request.allowed_toolsets) if request.allowed_toolsets else None,
-            max_iterations=DEFAULT_MAX_ITERATIONS, task_count=1, parent_agent=parent, role=request.role, **child_kwargs,
+            model=request.model or creds["model"], max_iterations=DEFAULT_MAX_ITERATIONS,
+            task_count=1, parent_agent=parent, role=request.role, **_credential_overrides(creds, routing_cfg),
         )
         subagent_id = str(getattr(child, "_subagent_id", "") or "")
         if not subagent_id:

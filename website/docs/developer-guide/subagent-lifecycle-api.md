@@ -83,6 +83,10 @@ bundle. An unresolvable provider raises `SubagentLifecycleError` before launch.
 Core does not expose `provider` to the model: the plugin chooses it, for example
 from operator config.
 
+The lifecycle API does not consult `delegation.backend`: the plugin that launches a child already chooses
+its route. To change how `delegate_task` routes the model's subagents, write a
+[delegation provider plugin](delegation-provider-plugin.md).
+
 ## Routes
 
 `routes()` returns the ids in the operator's `delegation.routes` that

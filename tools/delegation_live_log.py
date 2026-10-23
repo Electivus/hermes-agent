@@ -273,6 +273,19 @@ def shared_value(values) -> Optional[str]:
     return distinct.pop() if len(distinct) == 1 else None
 
 
+def route_identity(route: Any, parent_agent: Any) -> dict[str, Optional[str]]:
+    """The model, provider and, for a task routed by ``delegation.routes``, the route id the manifest records for one
+    task. A route that leaves the model or provider unset runs on the parent's; a refused task runs on nothing."""
+    from tools.delegate_tool_child_run import _str_or_none
+    if route.error:
+        return {"model": None, "provider": None, "route": None}
+    return {
+        "model": _str_or_none(route.creds.get("model") or getattr(parent_agent, "model", None)),
+        "provider": _str_or_none(route.creds.get("provider") or getattr(parent_agent, "provider", None)),
+        "route": _str_or_none(route.report()),
+    }
+
+
 def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]], paths: list[str],
                     identities: Optional[list[dict[str, Optional[str]]]] = None,
                     home: Optional[Path] = None) -> None:
@@ -296,8 +309,9 @@ def _write_manifest(delegation_id: str, task_list: list[dict[str, Any]], paths: 
 
 def update_manifest_statuses(delegation_id: Optional[str],
                              results: list[dict[str, Any]],
-                             home: Optional[Path] = None) -> None:
-    """Best-effort per-task status update once the batch has aggregated."""
+                             home: Optional[Path] = None, *, completed: bool = True) -> None:
+    """Best-effort per-task status update once the batch has aggregated (``completed=False``: tasks settled
+    before the batch ran, e.g. ones their backend refused, while the rest still run)."""
     if not delegation_id:
         return
     with _best_effort("manifest update"):
@@ -313,7 +327,8 @@ def update_manifest_statuses(delegation_id: Optional[str],
                 if r.get("model"):
                     task["model"] = r["model"]
         manifest["model"] = shared_value(t.get("model") for t in manifest.get("tasks", []))
-        manifest["completed"] = time.strftime(_TIME_FMT)
+        if completed:
+            manifest["completed"] = time.strftime(_TIME_FMT)
         _dump_json(mp, manifest)
 
 

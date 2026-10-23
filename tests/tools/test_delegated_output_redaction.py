@@ -120,7 +120,7 @@ def test_old_durable_results_are_redacted_on_read_replay_and_failure_roster():
 
 def test_route_id_survives_every_redacted_copy(monkeypatch):
     from agent.redact import redact_for_egress
-    from tools.delegate_tool_routes import parse_route_id
+    from tools.delegate_tool_route_catalog import parse_route_id
 
     route = "custom:lab/" + "hf_" + "syntheticroutemodelid" * 2
     assert parse_route_id(route).id == route

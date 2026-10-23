@@ -4,7 +4,7 @@ import pytest
 
 from hermes_constants import get_hermes_home
 from tools.delegate_tool import DELEGATE_TASK_SCHEMA
-from tools.delegate_tool_routes import RouteError, load_route_catalog, parse_route_id
+from tools.delegate_tool_route_catalog import RouteError, load_route_catalog, parse_route_id
 from tools.registry import registry
 
 OPUS = "anthropic/claude-opus-5-5@xhigh"
